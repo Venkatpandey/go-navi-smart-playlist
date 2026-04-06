@@ -87,7 +87,7 @@ go run ./cmd/app
 
 ### Docker Compose
 
-Update the values in [`docker-compose.yml`](/Users/venpan/GolandProjects/go-navi-smart-playlist/docker-compose.yml), then run:
+Update the values in [`docker-compose.yml`](/go-navi-smart-playlist/docker-compose.yml), then run:
 
 ```bash
 docker compose up --build -d
@@ -99,9 +99,8 @@ The container starts the job immediately, then refreshes playlists every 24 hour
 
 To preview generated playlists without modifying Navidrome:
 
-```bash
-export DRY_RUN=true
-go run ./cmd/app
+```
+DRY_RUN=true NAVIDROME_URL=http://192.168.0.25:4533 NAVIDROME_USER=user-name NAVIDROME_PASSWORD=your-password go run ./cmd/app
 ```
 
 This logs playlist names and track IDs instead of creating or updating playlists.

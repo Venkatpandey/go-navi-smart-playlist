@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     environment:
       NAVIDROME_URL: http://navidrome:4533
-      NAVIDROME_USER: venkat
-      NAVIDROME_PASSWORD: stjDbXRXW1gfJSt
+      NAVIDROME_USER: your-user
+      NAVIDROME_PASSWORD: your-password
       PLAYLIST_SIZE: "50"
       DRY_RUN: "false"

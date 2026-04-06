@@ -39,6 +39,9 @@ func (g *Generator) Generate(tracks []model.Track, now time.Time) []Definition {
 		{Name: "Discover Weekly", Tracks: g.discoverWeekly(tracks, now)},
 		{Name: "Rediscover", Tracks: g.rediscover(tracks, now)},
 		{Name: "Top This Month", Tracks: g.topThisMonth(tracks, now)},
+		{Name: "Hidden Gems", Tracks: g.hiddenGems(tracks, now)},
+		{Name: "Long Time No See", Tracks: g.longTimeNoSee(tracks, now)},
+		{Name: "Comfort Shuffle", Tracks: g.comfortShuffle(tracks, now)},
 	}
 
 	for _, definition := range definitions {
@@ -81,10 +84,10 @@ func (g *Generator) rediscover(tracks []model.Track, now time.Time) []model.Trac
 	var candidates []scoredTrack
 	for _, track := range tracks {
 		daysSincePlayed := daysSince(track.LastPlayed, now)
-		if track.PlayCount < 5 {
+		if track.PlayCount < 2 {
 			continue
 		}
-		if track.LastPlayed.IsZero() || daysSincePlayed < 60 || daysSincePlayed > 90 {
+		if track.LastPlayed.IsZero() || daysSincePlayed < 45 || daysSincePlayed > 180 {
 			continue
 		}
 
@@ -120,6 +123,100 @@ func (g *Generator) topThisMonth(tracks []model.Track, now time.Time) []model.Tr
 	})
 
 	return limitPerArtist(candidates, g.size, 2)
+}
+
+func (g *Generator) hiddenGems(tracks []model.Track, now time.Time) []model.Track {
+	var candidates []scoredTrack
+	for _, track := range tracks {
+		if track.PlayCount > 6 {
+			continue
+		}
+		if !track.LastPlayed.IsZero() && daysSince(track.LastPlayed, now) < 30 {
+			continue
+		}
+
+		score := g.engine.Score(track, now)
+		if track.Rating >= 4 {
+			score += 1.0
+		}
+		if track.Starred {
+			score += 0.75
+		}
+		if track.PlayCount <= 2 {
+			score += 0.35
+		}
+
+		candidates = append(candidates, scoredTrack{track: track, score: score})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	return limitPerArtist(toTracks(candidates), g.size, 2)
+}
+
+func (g *Generator) longTimeNoSee(tracks []model.Track, now time.Time) []model.Track {
+	var candidates []scoredTrack
+	for _, track := range tracks {
+		if track.PlayCount < 1 || track.LastPlayed.IsZero() {
+			continue
+		}
+
+		days := daysSince(track.LastPlayed, now)
+		if days < 120 {
+			continue
+		}
+
+		score := g.engine.Score(track, now) + float64(track.PlayCount)*0.15
+		if track.Rating >= 4 {
+			score += 0.5
+		}
+		if track.Starred {
+			score += 0.5
+		}
+
+		candidates = append(candidates, scoredTrack{track: track, score: score})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	return limitPerArtist(toTracks(candidates), g.size, 2)
+}
+
+func (g *Generator) comfortShuffle(tracks []model.Track, now time.Time) []model.Track {
+	var candidates []scoredTrack
+	for _, track := range tracks {
+		if track.PlayCount < 3 {
+			continue
+		}
+
+		days := daysSince(track.LastPlayed, now)
+		if !track.LastPlayed.IsZero() && days < 7 {
+			continue
+		}
+		if !track.LastPlayed.IsZero() && days > 180 {
+			continue
+		}
+
+		score := g.engine.Score(track, now) + float64(track.PlayCount)*0.2
+		if track.Rating >= 4 {
+			score += 0.5
+		}
+		if track.Starred {
+			score += 0.25
+		}
+
+		candidates = append(candidates, scoredTrack{track: track, score: score})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	return limitPerArtist(toTracks(candidates), g.size, 2)
 }
 
 func toTracks(items []scoredTrack) []model.Track {
