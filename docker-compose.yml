@@ -1,8 +1,6 @@
 services:
   smart-playlist:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/your-user/go-navi-smart-playlist:latest
     container_name: smart-playlist
     restart: unless-stopped
     environment:
@@ -11,3 +9,7 @@ services:
       NAVIDROME_PASSWORD: your-password
       PLAYLIST_SIZE: "50"
       DRY_RUN: "false"
+      ENABLE_STATE_CACHE: "true"
+      STATE_FILE: /data/smart-playlist/state.json
+    volumes:
+      - /volume1/docker/navidrome/data:/data

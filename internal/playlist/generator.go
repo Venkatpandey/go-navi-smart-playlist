@@ -2,12 +2,23 @@ package playlist
 
 import (
 	"log"
+	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"go-navi-smart-playlist/internal/config"
+	"go-navi-smart-playlist/internal/features"
 	"go-navi-smart-playlist/internal/model"
 	"go-navi-smart-playlist/internal/scoring"
+	"go-navi-smart-playlist/internal/similarity"
+	"go-navi-smart-playlist/internal/state"
+)
+
+const (
+	defaultArtistLimit = 3
+	defaultAlbumLimit  = 3
+	maxBackfillLimit   = 5
 )
 
 type Definition struct {
@@ -16,32 +27,105 @@ type Definition struct {
 }
 
 type Generator struct {
-	size   int
-	engine *scoring.Engine
-	logger *log.Logger
+	size        int
+	minBackfill int
+	engine      *scoring.Engine
+	logger      *log.Logger
 }
 
 type scoredTrack struct {
-	track model.Track
+	track features.TrackFeatures
 	score float64
 }
 
 func NewGenerator(cfg config.Config, logger *log.Logger) *Generator {
 	return &Generator{
-		size:   cfg.PlaylistSize,
-		engine: scoring.New(cfg.Weights),
-		logger: logger,
+		size:        cfg.PlaylistSize,
+		minBackfill: cfg.MinBackfill,
+		engine:      scoring.New(cfg.Weights),
+		logger:      logger,
 	}
 }
 
-func (g *Generator) Generate(tracks []model.Track, now time.Time) []Definition {
+func (g *Generator) Generate(dataset features.Dataset, previous *state.HistoryState, now time.Time) []Definition {
+	discoverWeekly := g.rankPlaylist("Discover Weekly", dataset.Items, previous, func(track features.TrackFeatures) float64 {
+		return g.engine.BaseScore(track) +
+			1.6*track.NoveltyScore +
+			0.6*freshnessCurve(track.DaysSinceAdded, 0, 120) +
+			0.4*windowScore(track.DaysSinceLastPlayed, 14, 120, 35) -
+			0.7*track.PlayCountPercentile
+	})
+
+	rediscover := g.rankPlaylist("Rediscover", dataset.Items, previous, func(track features.TrackFeatures) float64 {
+		return g.engine.BaseScore(track) +
+			1.4*windowScore(track.DaysSinceLastPlayed, 45, 180, 40) +
+			0.9*track.PlayCountPercentile +
+			0.4*track.StabilityScore -
+			0.3*track.NoveltyScore
+	})
+
+	topThisMonth := g.rankPlaylist("Top This Month", dataset.Items, previous, func(track features.TrackFeatures) float64 {
+		return g.engine.BaseScore(track) +
+			1.8*windowScore(track.DaysSinceLastPlayed, 0, 30, 12) +
+			0.9*track.RecencyTrendScore +
+			0.4*track.PlayCountDelta +
+			0.5*track.PlayCountPercentile
+	})
+
+	hiddenGems := g.rankPlaylist("Hidden Gems", dataset.Items, previous, func(track features.TrackFeatures) float64 {
+		return g.engine.BaseScore(track) +
+			1.5*track.NoveltyScore +
+			0.8*(1-track.PlayCountPercentile) +
+			0.35*boolScore(track.Track.Starred) +
+			0.35*clamp01(float64(track.Track.Rating)/5.0) +
+			0.3*windowScore(track.DaysSinceLastPlayed, 21, 240, 60)
+	})
+
+	longTimeNoSee := g.rankPlaylist("Long Time No See", dataset.Items, previous, func(track features.TrackFeatures) float64 {
+		return g.engine.BaseScore(track) +
+			1.6*longTailScore(track.DaysSinceLastPlayed, 120, 45) +
+			0.7*track.PlayCountPercentile +
+			0.4*track.StabilityScore -
+			0.2*track.NoveltyScore
+	})
+
+	comfortShuffle := g.rankPlaylist("Comfort Shuffle", dataset.Items, previous, func(track features.TrackFeatures) float64 {
+		return g.engine.BaseScore(track) +
+			1.5*windowScore(track.DaysSinceLastPlayed, 7, 180, 45) +
+			1.0*track.PlayCountPercentile +
+			0.5*track.StabilityScore -
+			0.4*track.RepeatFatigueScore
+	})
+
+	moreLikeHiddenGems := g.similarPlaylist(
+		"More Like Hidden Gems",
+		dataset,
+		previous,
+		hiddenGems,
+		func(track features.TrackFeatures, similarityScore float64) float64 {
+			return 1.5*similarityScore + g.engine.BaseScore(track) + 0.8*track.NoveltyScore
+		},
+	)
+
+	artistAdjacentComfort := g.similarPlaylist(
+		"Artist Adjacent Comfort",
+		dataset,
+		previous,
+		comfortShuffle,
+		func(track features.TrackFeatures, similarityScore float64) float64 {
+			return 1.5*similarityScore + g.engine.BaseScore(track) + 0.5*track.StabilityScore + 0.4*track.PlayCountPercentile
+		},
+	)
+
 	definitions := []Definition{
-		{Name: "Discover Weekly", Tracks: g.discoverWeekly(tracks, now)},
-		{Name: "Rediscover", Tracks: g.rediscover(tracks, now)},
-		{Name: "Top This Month", Tracks: g.topThisMonth(tracks, now)},
-		{Name: "Hidden Gems", Tracks: g.hiddenGems(tracks, now)},
-		{Name: "Long Time No See", Tracks: g.longTimeNoSee(tracks, now)},
-		{Name: "Comfort Shuffle", Tracks: g.comfortShuffle(tracks, now)},
+		{Name: "Discover Weekly", Tracks: toTracks(discoverWeekly)},
+		{Name: "Rediscover", Tracks: toTracks(rediscover)},
+		{Name: "Top This Month", Tracks: toTracks(topThisMonth)},
+		{Name: "Hidden Gems", Tracks: toTracks(hiddenGems)},
+		{Name: "Long Time No See", Tracks: toTracks(longTimeNoSee)},
+		{Name: "Comfort Shuffle", Tracks: toTracks(comfortShuffle)},
+		{Name: "More Like Hidden Gems", Tracks: toTracks(moreLikeHiddenGems)},
+		{Name: "Artist Adjacent Comfort", Tracks: toTracks(artistAdjacentComfort)},
 	}
 
 	for _, definition := range definitions {
@@ -51,234 +135,176 @@ func (g *Generator) Generate(tracks []model.Track, now time.Time) []Definition {
 	return definitions
 }
 
-func (g *Generator) discoverWeekly(tracks []model.Track, now time.Time) []model.Track {
-	var candidates []scoredTrack
-	for _, track := range tracks {
-		daysSincePlayed := daysSince(track.LastPlayed, now)
-		if track.PlayCount > 8 {
-			continue
-		}
-		if !track.LastPlayed.IsZero() && daysSincePlayed < 21 {
-			continue
-		}
-
-		score := g.engine.Score(track, now)
-		if track.PlayCount == 0 {
-			score += 0.5
-		}
-		if track.Starred {
-			score += 0.25
-		}
-
-		candidates = append(candidates, scoredTrack{track: track, score: score})
+func (g *Generator) similarPlaylist(
+	name string,
+	dataset features.Dataset,
+	previous *state.HistoryState,
+	seeds []features.TrackFeatures,
+	scorer func(track features.TrackFeatures, similarityScore float64) float64,
+) []features.TrackFeatures {
+	if len(seeds) == 0 {
+		return nil
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
-	})
-
-	return limitDiversity(toTracks(candidates), g.size, 3, 3)
-}
-
-func (g *Generator) rediscover(tracks []model.Track, now time.Time) []model.Track {
-	var candidates []scoredTrack
-	for _, track := range tracks {
-		daysSincePlayed := daysSince(track.LastPlayed, now)
-		if track.PlayCount < 2 {
-			continue
+	seedVectors := make([][]float64, 0, min(len(seeds), 10))
+	seedIDs := make(map[string]struct{}, len(seeds))
+	seedArtists := make(map[string]struct{}, len(seeds))
+	for index, seed := range seeds {
+		if index >= 10 {
+			break
 		}
-		if track.LastPlayed.IsZero() || daysSincePlayed < 45 || daysSincePlayed > 180 {
-			continue
-		}
-
-		score := g.engine.Score(track, now) + float64(track.PlayCount)*0.1
-		candidates = append(candidates, scoredTrack{track: track, score: score})
+		seedVectors = append(seedVectors, seed.SimilarityVector)
+		seedIDs[seed.Track.ID] = struct{}{}
+		seedArtists[canonicalKey(seed.Track.Artist)] = struct{}{}
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
-	})
-
-	return limitDiversity(toTracks(candidates), g.size, 3, 3)
-}
-
-func (g *Generator) topThisMonth(tracks []model.Track, now time.Time) []model.Track {
-	var candidates []model.Track
-	for _, track := range tracks {
-		if track.LastPlayed.IsZero() {
-			continue
-		}
-		if daysSince(track.LastPlayed, now) > 30 {
-			continue
-		}
-
-		candidates = append(candidates, track)
+	centroid := similarity.Centroid(seedVectors)
+	if len(centroid) == 0 {
+		return nil
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].PlayCount == candidates[j].PlayCount {
-			return candidates[i].LastPlayed.After(candidates[j].LastPlayed)
-		}
-		return candidates[i].PlayCount > candidates[j].PlayCount
-	})
-
-	return limitDiversity(candidates, g.size, 3, 3)
-}
-
-func (g *Generator) hiddenGems(tracks []model.Track, now time.Time) []model.Track {
-	var candidates []scoredTrack
-	for _, track := range tracks {
-		if track.PlayCount > 6 {
-			continue
-		}
-		if !track.LastPlayed.IsZero() && daysSince(track.LastPlayed, now) < 30 {
+	scored := make([]scoredTrack, 0, len(dataset.Items))
+	for _, track := range dataset.Items {
+		if _, isSeed := seedIDs[track.Track.ID]; isSeed {
 			continue
 		}
 
-		score := g.engine.Score(track, now)
-		if track.Rating >= 4 {
-			score += 1.0
+		score := scorer(track, similarity.CosineSimilarity(track.SimilarityVector, centroid))
+		if _, duplicateArtist := seedArtists[canonicalKey(track.Track.Artist)]; duplicateArtist {
+			score -= 0.25
 		}
-		if track.Starred {
-			score += 0.75
-		}
-		if track.PlayCount <= 2 {
-			score += 0.35
-		}
+		score += g.previousPlaylistBoost(previous, name, track.Track.ID)
 
-		candidates = append(candidates, scoredTrack{track: track, score: score})
+		scored = append(scored, scoredTrack{track: track, score: score})
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
 	})
 
-	return limitDiversity(toTracks(candidates), g.size, 3, 3)
+	return g.finalize(name, scored)
 }
 
-func (g *Generator) longTimeNoSee(tracks []model.Track, now time.Time) []model.Track {
-	var candidates []scoredTrack
-	for _, track := range tracks {
-		if track.PlayCount < 1 || track.LastPlayed.IsZero() {
-			continue
-		}
-
-		days := daysSince(track.LastPlayed, now)
-		if days < 120 {
-			continue
-		}
-
-		score := g.engine.Score(track, now) + float64(track.PlayCount)*0.15
-		if track.Rating >= 4 {
-			score += 0.5
-		}
-		if track.Starred {
-			score += 0.5
-		}
-
-		candidates = append(candidates, scoredTrack{track: track, score: score})
+func (g *Generator) rankPlaylist(
+	name string,
+	items []features.TrackFeatures,
+	previous *state.HistoryState,
+	scorer func(track features.TrackFeatures) float64,
+) []features.TrackFeatures {
+	scored := make([]scoredTrack, 0, len(items))
+	for _, track := range items {
+		score := scorer(track) + g.previousPlaylistBoost(previous, name, track.Track.ID)
+		scored = append(scored, scoredTrack{track: track, score: score})
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
 	})
 
-	return limitDiversity(toTracks(candidates), g.size, 3, 3)
+	return g.finalize(name, scored)
 }
 
-func (g *Generator) comfortShuffle(tracks []model.Track, now time.Time) []model.Track {
-	var candidates []scoredTrack
-	for _, track := range tracks {
-		if track.PlayCount < 3 {
-			continue
-		}
-
-		days := daysSince(track.LastPlayed, now)
-		if !track.LastPlayed.IsZero() && days < 7 {
-			continue
-		}
-		if !track.LastPlayed.IsZero() && days > 180 {
-			continue
-		}
-
-		score := g.engine.Score(track, now) + float64(track.PlayCount)*0.2
-		if track.Rating >= 4 {
-			score += 0.5
-		}
-		if track.Starred {
-			score += 0.25
-		}
-
-		candidates = append(candidates, scoredTrack{track: track, score: score})
+func (g *Generator) finalize(name string, scored []scoredTrack) []features.TrackFeatures {
+	result := limitDiversity(scored, g.size, defaultArtistLimit, defaultAlbumLimit)
+	if len(result) < min(g.size, g.minBackfill) {
+		result = limitDiversity(scored, g.size, maxBackfillLimit, maxBackfillLimit)
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
-	})
-
-	return limitDiversity(toTracks(candidates), g.size, 3, 3)
+	g.logger.Printf("playlist %q candidates=%d selected=%d", name, len(scored), len(result))
+	return result
 }
 
-func toTracks(items []scoredTrack) []model.Track {
+func (g *Generator) previousPlaylistBoost(previous *state.HistoryState, playlistName, trackID string) float64 {
+	if previous == nil || !previous.PlaylistContains(playlistName, trackID) {
+		return 0
+	}
+
+	return 0.18
+}
+
+func toTracks(items []features.TrackFeatures) []model.Track {
 	tracks := make([]model.Track, 0, len(items))
 	for _, item := range items {
-		tracks = append(tracks, item.track)
+		tracks = append(tracks, item.Track)
 	}
 
 	return tracks
 }
 
-func limitDiversity(tracks []model.Track, size, maxPerArtist, maxPerAlbum int) []model.Track {
-	result := make([]model.Track, 0, min(len(tracks), size))
+func limitDiversity(items []scoredTrack, size, maxPerArtist, maxPerAlbum int) []features.TrackFeatures {
+	result := make([]features.TrackFeatures, 0, min(len(items), size))
 	artistCounts := make(map[string]int)
 	albumCounts := make(map[string]int)
 
-	for _, track := range tracks {
+	for _, item := range items {
 		if len(result) >= size {
 			break
 		}
 
-		artistKey := track.Artist
-		if artistKey == "" {
-			artistKey = "__unknown__"
-		}
-		if artistCounts[artistKey] >= maxPerArtist {
-			continue
-		}
-
-		albumKey := track.Album
-		if albumKey == "" {
-			albumKey = "__unknown__"
-		}
-		if albumCounts[albumKey] >= maxPerAlbum {
+		artistKey := canonicalKey(item.track.Track.Artist)
+		albumKey := canonicalKey(item.track.Track.Album)
+		if artistCounts[artistKey] >= maxPerArtist || albumCounts[albumKey] >= maxPerAlbum {
 			continue
 		}
 
 		artistCounts[artistKey]++
 		albumCounts[albumKey]++
-		result = append(result, track)
+		result = append(result, item.track)
 	}
 
 	return result
+}
+
+func canonicalKey(value string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(value))
+	if trimmed == "" {
+		return "__unknown__"
+	}
+	return trimmed
+}
+
+func windowScore(value, start, end, softness float64) float64 {
+	if value >= start && value <= end {
+		return 1
+	}
+	if value < start {
+		return math.Exp(-(start - value) / softness)
+	}
+	return math.Exp(-(value - end) / softness)
+}
+
+func longTailScore(value, start, softness float64) float64 {
+	if value >= start {
+		return 1 - math.Exp(-(value-start)/softness)
+	}
+	return math.Exp(-(start - value) / softness)
+}
+
+func freshnessCurve(value, start, end float64) float64 {
+	return windowScore(value, start, end, 45)
+}
+
+func boolScore(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func clamp01(value float64) float64 {
+	switch {
+	case value < 0:
+		return 0
+	case value > 1:
+		return 1
+	default:
+		return value
+	}
 }
 
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
-
 	return b
-}
-
-func daysSince(when, now time.Time) float64 {
-	if when.IsZero() {
-		return 3650
-	}
-
-	days := now.Sub(when).Hours() / 24
-	if days < 0 {
-		return 0
-	}
-
-	return days
 }

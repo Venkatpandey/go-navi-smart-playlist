@@ -16,6 +16,9 @@ const (
 	defaultRunTimeout    = 15 * time.Minute
 	defaultClientName    = "go-smart-playlist"
 	defaultAPIVersion    = "1.16.1"
+	defaultStateDir      = "/tmp/go-smart-playlist"
+	defaultStateFileName = "state.json"
+	defaultBackfillSize  = 20
 )
 
 type Config struct {
@@ -29,6 +32,9 @@ type Config struct {
 	RunTimeout    time.Duration
 	ClientName    string
 	APIVersion    string
+	StateFile     string
+	EnableState   bool
+	MinBackfill   int
 }
 
 type Weights struct {
@@ -49,6 +55,9 @@ func Load() (Config, error) {
 		RunTimeout:    getDuration("RUN_TIMEOUT", defaultRunTimeout),
 		ClientName:    getString("SUBSONIC_CLIENT_NAME", defaultClientName),
 		APIVersion:    getString("SUBSONIC_API_VERSION", defaultAPIVersion),
+		StateFile:     resolveStateFile(),
+		EnableState:   getBool("ENABLE_STATE_CACHE", true),
+		MinBackfill:   getInt("MIN_CANDIDATE_BACKFILL", defaultBackfillSize),
 		Weights: Weights{
 			PlayCount: getFloat("SCORE_WEIGHT_PLAYCOUNT", 1.0),
 			Recency:   getFloat("SCORE_WEIGHT_RECENCY", 2.0),
@@ -73,7 +82,25 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("SCORE_DECAY_DAYS must be positive, got %.2f", cfg.Weights.DecayDays)
 	}
 
+	if cfg.MinBackfill < 0 {
+		return Config{}, fmt.Errorf("MIN_CANDIDATE_BACKFILL must be non-negative, got %d", cfg.MinBackfill)
+	}
+
 	return cfg, nil
+}
+
+func resolveStateFile() string {
+	stateFile := strings.TrimSpace(os.Getenv("STATE_FILE"))
+	if stateFile != "" {
+		return stateFile
+	}
+
+	stateDir := strings.TrimSpace(os.Getenv("STATE_DIR"))
+	if stateDir == "" {
+		stateDir = defaultStateDir
+	}
+
+	return stateDir + "/" + defaultStateFileName
 }
 
 func getString(key, fallback string) string {

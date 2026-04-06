@@ -10,9 +10,16 @@ Lightweight Go microservice for Navidrome that generates smart playlists from li
   - `Discover Weekly`
   - `Rediscover`
   - `Top This Month`
-- Applies a diversity rule of max 2 tracks per artist per playlist
+  - `Hidden Gems`
+  - `Long Time No See`
+  - `Comfort Shuffle`
+  - `More Like Hidden Gems`
+  - `Artist Adjacent Comfort`
+- Persists a tiny local state cache to improve future recommendations
+- Uses derived features and lightweight vector similarity for better ranking
+- Applies diversity rules with caps per artist and album
 - Creates missing playlists and updates existing ones
-- Runs once on startup, then every 24 hours
+- Runs once on startup, then every 7 days
 - Supports `DRY_RUN=true` to preview playlists without writing changes
 - Uses only the Go standard library
 
@@ -55,6 +62,10 @@ Optional:
 - `SCORE_WEIGHT_RECENCY` default: `2.0`
 - `SCORE_WEIGHT_FRESHNESS` default: `1.5`
 - `SCORE_DECAY_DAYS` default: `45`
+- `ENABLE_STATE_CACHE` default: `true`
+- `STATE_FILE` default: `/tmp/go-smart-playlist/state.json`
+- `STATE_DIR` optional alternative to `STATE_FILE`
+- `MIN_CANDIDATE_BACKFILL` default: `20`
 
 ## Installation
 
@@ -64,11 +75,12 @@ Clone the repository and build it locally:
 go build ./cmd/app
 ```
 
-Or run it with Docker:
+For NAS deployment, the recommended path is:
 
-```bash
-docker compose build
-```
+1. publish a public image to GHCR
+2. copy `docker-compose.yml` to the NAS
+3. edit the image name and Navidrome credentials directly in the compose file
+4. run `docker compose pull && docker compose up -d`
 
 ## How To Run
 
@@ -87,13 +99,58 @@ go run ./cmd/app
 
 ### Docker Compose
 
+The included compose file is set up for image-based deployment from GHCR. Edit these values directly in [`docker-compose.yml`](/go-navi-smart-playlist/docker-compose.yml):
+
+```yaml
+image: ghcr.io/your-user/go-navi-smart-playlist:latest
+environment:
+  NAVIDROME_URL: http://navidrome:4533
+  NAVIDROME_USER: your-user
+  NAVIDROME_PASSWORD: your-password
+```
+
 Update the values in [`docker-compose.yml`](/go-navi-smart-playlist/docker-compose.yml), then run:
 
 ```bash
-docker compose up --build -d
+docker compose pull
+docker compose up -d
 ```
 
-The container starts the job immediately, then refreshes playlists every 24 hours.
+The container starts the job immediately, then refreshes playlists every 7 days.
+
+To preserve recommendation state across container restarts, point `STATE_FILE` at a dedicated subfolder inside your Navidrome data path. Example:
+
+```yaml
+environment:
+  STATE_FILE: /data/smart-playlist/state.json
+volumes:
+  - /volume1/docker/navidrome/data:/data
+```
+
+This keeps the cache isolated under `/vol1/docker/navidrome/data/smart-playlist/` while still reusing your existing storage mount.
+
+## GitHub Container Registry
+
+GHCR works well for this setup, and public images can be pulled without logging in on the NAS.
+
+This repository now includes a GitHub Actions workflow at [`.github/workflows/publish.yml`](/go-navi-smart-playlist/.github/workflows/publish.yml) that:
+
+- builds the Docker image on pushes to `main`
+- publishes `latest` for the default branch
+- publishes tag-based versions for `v*` tags
+
+After pushing this repo to GitHub:
+
+1. enable GitHub Actions for the repository
+2. let the workflow publish the image to GHCR
+3. set the package visibility to public in GitHub Packages
+4. use the published image name directly in the NAS compose file
+
+Typical image name:
+
+```text
+ghcr.io/<your-user>/go-navi-smart-playlist:latest
+```
 
 ## Dry Run
 
@@ -108,5 +165,8 @@ This logs playlist names and track IDs instead of creating or updating playlists
 ## Notes
 
 - The service keeps all data in memory and does not use a database
+- A small JSON state file can be persisted to improve recommendations over time
+- A good default cache path is `/data/smart-playlist/state.json` when `/data` is already mapped to your Navidrome host storage
 - It is designed for small-to-medium personal libraries, around a few thousand tracks
+- Recommendation quality improves as Navidrome accumulates more `playCount` and `last played` history
 - For full collection and safe playlist replacement, it uses `getAlbum` and `getPlaylist` in addition to the main playlist and album list endpoints
