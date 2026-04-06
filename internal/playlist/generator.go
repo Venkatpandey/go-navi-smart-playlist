@@ -77,7 +77,7 @@ func (g *Generator) discoverWeekly(tracks []model.Track, now time.Time) []model.
 		return candidates[i].score > candidates[j].score
 	})
 
-	return limitPerArtist(toTracks(candidates), g.size, 2)
+	return limitDiversity(toTracks(candidates), g.size, 3, 3)
 }
 
 func (g *Generator) rediscover(tracks []model.Track, now time.Time) []model.Track {
@@ -99,7 +99,7 @@ func (g *Generator) rediscover(tracks []model.Track, now time.Time) []model.Trac
 		return candidates[i].score > candidates[j].score
 	})
 
-	return limitPerArtist(toTracks(candidates), g.size, 2)
+	return limitDiversity(toTracks(candidates), g.size, 3, 3)
 }
 
 func (g *Generator) topThisMonth(tracks []model.Track, now time.Time) []model.Track {
@@ -122,7 +122,7 @@ func (g *Generator) topThisMonth(tracks []model.Track, now time.Time) []model.Tr
 		return candidates[i].PlayCount > candidates[j].PlayCount
 	})
 
-	return limitPerArtist(candidates, g.size, 2)
+	return limitDiversity(candidates, g.size, 3, 3)
 }
 
 func (g *Generator) hiddenGems(tracks []model.Track, now time.Time) []model.Track {
@@ -153,7 +153,7 @@ func (g *Generator) hiddenGems(tracks []model.Track, now time.Time) []model.Trac
 		return candidates[i].score > candidates[j].score
 	})
 
-	return limitPerArtist(toTracks(candidates), g.size, 2)
+	return limitDiversity(toTracks(candidates), g.size, 3, 3)
 }
 
 func (g *Generator) longTimeNoSee(tracks []model.Track, now time.Time) []model.Track {
@@ -183,7 +183,7 @@ func (g *Generator) longTimeNoSee(tracks []model.Track, now time.Time) []model.T
 		return candidates[i].score > candidates[j].score
 	})
 
-	return limitPerArtist(toTracks(candidates), g.size, 2)
+	return limitDiversity(toTracks(candidates), g.size, 3, 3)
 }
 
 func (g *Generator) comfortShuffle(tracks []model.Track, now time.Time) []model.Track {
@@ -216,7 +216,7 @@ func (g *Generator) comfortShuffle(tracks []model.Track, now time.Time) []model.
 		return candidates[i].score > candidates[j].score
 	})
 
-	return limitPerArtist(toTracks(candidates), g.size, 2)
+	return limitDiversity(toTracks(candidates), g.size, 3, 3)
 }
 
 func toTracks(items []scoredTrack) []model.Track {
@@ -228,9 +228,10 @@ func toTracks(items []scoredTrack) []model.Track {
 	return tracks
 }
 
-func limitPerArtist(tracks []model.Track, size, maxPerArtist int) []model.Track {
+func limitDiversity(tracks []model.Track, size, maxPerArtist, maxPerAlbum int) []model.Track {
 	result := make([]model.Track, 0, min(len(tracks), size))
 	artistCounts := make(map[string]int)
+	albumCounts := make(map[string]int)
 
 	for _, track := range tracks {
 		if len(result) >= size {
@@ -245,7 +246,16 @@ func limitPerArtist(tracks []model.Track, size, maxPerArtist int) []model.Track 
 			continue
 		}
 
+		albumKey := track.Album
+		if albumKey == "" {
+			albumKey = "__unknown__"
+		}
+		if albumCounts[albumKey] >= maxPerAlbum {
+			continue
+		}
+
 		artistCounts[artistKey]++
+		albumCounts[albumKey]++
 		result = append(result, track)
 	}
 
