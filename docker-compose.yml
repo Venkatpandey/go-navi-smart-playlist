@@ -1,0 +1,13 @@
+services:
+  smart-playlist:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smart-playlist
+    restart: unless-stopped
+    environment:
+      NAVIDROME_URL: http://navidrome:4533
+      NAVIDROME_USER: venkat
+      NAVIDROME_PASSWORD: stjDbXRXW1gfJSt
+      PLAYLIST_SIZE: "50"
+      DRY_RUN: "false"
