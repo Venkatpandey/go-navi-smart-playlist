@@ -1,6 +1,6 @@
 services:
   smart-playlist:
-    image: ghcr.io/your-user/go-navi-smart-playlist:latest
+    image: ghcr.io/venkatpandey/go-navi-smart-playlist:latest
     container_name: smart-playlist
     restart: unless-stopped
     environment:
@@ -10,6 +10,6 @@ services:
       PLAYLIST_SIZE: "50"
       DRY_RUN: "false"
       ENABLE_STATE_CACHE: "true"
-      STATE_FILE: /data/smart-playlist/state.json
+      STATE_FILE: /data/smart-playlist/your-user/state.json
     volumes:
       - /volume1/docker/navidrome/data:/data

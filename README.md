@@ -89,7 +89,7 @@ For NAS deployment, the recommended path is:
 Set the required environment variables and start the service:
 
 ```bash
-export NAVIDROME_URL=http://localhost:4533
+export NAVIDROME_URL=http://navidrome:4533
 export NAVIDROME_USER=your-user
 export NAVIDROME_PASSWORD=your-password
 export PLAYLIST_SIZE=50
@@ -102,7 +102,7 @@ go run ./cmd/app
 The included compose file is set up for image-based deployment from GHCR. Edit these values directly in [`docker-compose.yml`](/go-navi-smart-playlist/docker-compose.yml):
 
 ```yaml
-image: ghcr.io/your-user/go-navi-smart-playlist:latest
+image: ghcr.io/venkatpandey/go-navi-smart-playlist:latest
 environment:
   NAVIDROME_URL: http://navidrome:4533
   NAVIDROME_USER: your-user
@@ -129,27 +129,60 @@ volumes:
 
 This keeps the cache isolated under `/vol1/docker/navidrome/data/smart-playlist/` while still reusing your existing storage mount.
 
-## GitHub Container Registry
+## Multi-User Support
 
-GHCR works well for this setup, and public images can be pulled without logging in on the NAS.
+The current support model is:
 
-This repository now includes a GitHub Actions workflow at [`.github/workflows/publish.yml`](/go-navi-smart-playlist/.github/workflows/publish.yml) that:
+- one Navidrome user per service instance
+- one container per user
+- one separate `STATE_FILE` per user
 
-- builds the Docker image on pushes to `main`
-- publishes `latest` for the default branch
-- publishes tag-based versions for `v*` tags
+This works today without code changes. The app does not yet support multiple Navidrome users inside a single container.
 
-After pushing this repo to GitHub:
+Important:
 
-1. enable GitHub Actions for the repository
-2. let the workflow publish the image to GHCR
-3. set the package visibility to public in GitHub Packages
-4. use the published image name directly in the NAS compose file
+- each container must use a different `NAVIDROME_USER`
+- each container must use a different `NAVIDROME_PASSWORD`
+- each container must use a different `STATE_FILE`
 
-Typical image name:
+Example with two users:
 
-```text
-ghcr.io/<your-user>/go-navi-smart-playlist:latest
+```yaml
+services:
+  smart-playlist-alice:
+    image: ghcr.io/venkatpandey/go-navi-smart-playlist:latest
+    container_name: smart-playlist-alice
+    restart: unless-stopped
+    environment:
+      NAVIDROME_URL: http://navidrome:4533
+      NAVIDROME_USER: alice
+      NAVIDROME_PASSWORD: alice-password
+      PLAYLIST_SIZE: "50"
+      DRY_RUN: "false"
+      ENABLE_STATE_CACHE: "true"
+      STATE_FILE: /data/smart-playlist/alice/state.json
+    volumes:
+      - /volume1/docker/navidrome/data:/data
+
+  smart-playlist-bob:
+    image: ghcr.io/venkatpandey/go-navi-smart-playlist:latest
+    container_name: smart-playlist-bob
+    restart: unless-stopped
+    environment:
+      NAVIDROME_URL: http://navidrome:4533
+      NAVIDROME_USER: bob
+      NAVIDROME_PASSWORD: bob-password
+      PLAYLIST_SIZE: "50"
+      DRY_RUN: "false"
+      ENABLE_STATE_CACHE: "true"
+      STATE_FILE: /data/smart-playlist/bob/state.json
+    volumes:
+      - /volume1/docker/navidrome/data:/data
+```
+
+This avoids cache collisions because each user writes to a different JSON state file. Playlist names can stay the same because they are created under different Navidrome user accounts.
+
+
 ```
 
 ## Dry Run
