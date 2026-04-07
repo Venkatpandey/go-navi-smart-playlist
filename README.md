@@ -1,5 +1,10 @@
 # go-navi-smart-playlist
 
+[![Publish Docker Image](https://github.com/Venkatpandey/go-navi-smart-playlist/actions/workflows/publish.yml/badge.svg)](https://github.com/Venkatpandey/go-navi-smart-playlist/actions/workflows/publish.yml)
+[![Latest Release](https://img.shields.io/github/v/release/Venkatpandey/go-navi-smart-playlist?label=release)](https://github.com/Venkatpandey/go-navi-smart-playlist/releases)
+[![Go Version](https://img.shields.io/badge/go-1.24+-00ADD8?logo=go)](https://go.dev/)
+[![License](https://img.shields.io/github/license/Venkatpandey/go-navi-smart-playlist)](https://github.com/Venkatpandey/go-navi-smart-playlist/blob/main/LICENSE)
+
 Lightweight Go microservice for Navidrome that generates smart playlists from listening behavior and writes them back through the Subsonic-compatible API.
 
 ## Features
