@@ -47,18 +47,33 @@ internal/playlist
 
 - Go 1.24+
 - A reachable Navidrome instance
-- Subsonic API access with:
+- Single-user mode:
   - `NAVIDROME_URL`
   - `NAVIDROME_USER`
   - `NAVIDROME_PASSWORD`
+- Multi-user mode:
+  - `NAVIDROME_URL`
+  - `NAVIDROME_ADMIN_USER`
+  - `NAVIDROME_ADMIN_PASSWORD`
+  - `MULTI_USER_CONFIG_FILE`
+  - `STATE_DIR`
 
 ## Configuration
 
-Required:
+Required for single-user mode:
 
 - `NAVIDROME_URL`
 - `NAVIDROME_USER`
 - `NAVIDROME_PASSWORD`
+
+Required for multi-user mode:
+
+- `NAVIDROME_URL`
+- `MULTI_USER_ENABLED=true`
+- `NAVIDROME_ADMIN_USER`
+- `NAVIDROME_ADMIN_PASSWORD`
+- `MULTI_USER_CONFIG_FILE`
+- `STATE_DIR`
 
 Optional:
 
@@ -74,6 +89,23 @@ Optional:
 - `STATE_FILE` default: `/tmp/go-smart-playlist/state.json`
 - `STATE_DIR` optional alternative to `STATE_FILE`
 - `MIN_CANDIDATE_BACKFILL` default: `20`
+
+`STATE_FILE` and `STATE_DIR` behavior:
+
+- single-user mode: use `STATE_FILE` or `STATE_DIR`
+- multi-user mode: use `STATE_DIR` only
+- multi-user per-user cache path: `<STATE_DIR>/<username>/state.json`
+
+Multi-user config file format:
+
+```json
+{
+  "users": [
+    { "username": "alice", "password": "alice-pass", "enabled": true },
+    { "username": "bob", "password": "bob-pass" }
+  ]
+}
+```
 
 ## Installation
 
@@ -107,6 +139,8 @@ go run ./cmd/app
 
 ### Docker Compose
 
+Single-user example:
+
 The included compose file is set up for image-based deployment from GHCR. Edit these values directly in [`docker-compose.yml`](/go-navi-smart-playlist/docker-compose.yml):
 
 ```yaml
@@ -139,59 +173,62 @@ This keeps the cache isolated under `/vol1/docker/navidrome/data/smart-playlist/
 
 ## Multi-User Support
 
-The current support model is:
+Multi-user mode can manage multiple Navidrome users from one container.
 
-- one Navidrome user per service instance
-- one container per user
-- one separate `STATE_FILE` per user
+How it works:
 
-This works today without code changes. The app does not yet support multiple Navidrome users inside a single container.
+- logs into Navidrome native API with admin credentials
+- discovers users from `GET /api/user`
+- matches discovered users against mounted JSON credentials
+- refreshes users serially, `1by1`
+- continues after per-user failures
+- returns partial failure if any user failed or had no enabled credentials entry
 
 Important:
 
-- each container must use a different `NAVIDROME_USER`
-- each container must use a different `NAVIDROME_PASSWORD`
-- each container must use a different `STATE_FILE`
+- each discovered user must exist in `MULTI_USER_CONFIG_FILE`
+- disabled users in Navidrome are skipped when exposed by native API
+- credentials entries not found in discovery are ignored with a warning
+- native API discovery is undocumented and may change across Navidrome versions
 
-Example with two users:
+Example `docker-compose.yml`:
 
 ```yaml
 services:
-  smart-playlist-alice:
+  smart-playlist:
     image: ghcr.io/venkatpandey/go-navi-smart-playlist:latest
-    container_name: smart-playlist-alice
+    container_name: smart-playlist
     restart: unless-stopped
     environment:
       NAVIDROME_URL: http://navidrome:4533
-      NAVIDROME_USER: alice
-      NAVIDROME_PASSWORD: alice-password
+      MULTI_USER_ENABLED: "true"
+      NAVIDROME_ADMIN_USER: admin
+      NAVIDROME_ADMIN_PASSWORD: admin-password
+      MULTI_USER_CONFIG_FILE: /run/secrets/navidrome-users.json
       PLAYLIST_SIZE: "50"
       DRY_RUN: "false"
       ENABLE_STATE_CACHE: "true"
-      STATE_FILE: /data/smart-playlist/alice/state.json
+      STATE_DIR: /data/smart-playlist
     volumes:
       - /volume1/docker/navidrome/data:/data
-
-  smart-playlist-bob:
-    image: ghcr.io/venkatpandey/go-navi-smart-playlist:latest
-    container_name: smart-playlist-bob
-    restart: unless-stopped
-    environment:
-      NAVIDROME_URL: http://navidrome:4533
-      NAVIDROME_USER: bob
-      NAVIDROME_PASSWORD: bob-password
-      PLAYLIST_SIZE: "50"
-      DRY_RUN: "false"
-      ENABLE_STATE_CACHE: "true"
-      STATE_FILE: /data/smart-playlist/bob/state.json
-    volumes:
-      - /volume1/docker/navidrome/data:/data
+      - ./secrets/navidrome-users.json:/run/secrets/navidrome-users.json:ro
 ```
 
-This avoids cache collisions because each user writes to a different JSON state file. Playlist names can stay the same because they are created under different Navidrome user accounts.
+Example `navidrome-users.json`:
 
-
+```json
+{
+  "users": [
+    { "username": "alice", "password": "alice-password" },
+    { "username": "bob", "password": "bob-password" }
+  ]
+}
 ```
+
+Per-user state files land at:
+
+- `/data/smart-playlist/alice/state.json`
+- `/data/smart-playlist/bob/state.json`
 
 ## Dry Run
 
@@ -208,6 +245,7 @@ This logs playlist names and track IDs instead of creating or updating playlists
 - The service keeps all data in memory and does not use a database
 - A small JSON state file can be persisted to improve recommendations over time
 - A good default cache path is `/data/smart-playlist/state.json` when `/data` is already mapped to your Navidrome host storage
+- Multi-user mode uses undocumented Navidrome native endpoints only for user discovery
 - It is designed for small-to-medium personal libraries, around a few thousand tracks
 - Recommendation quality improves as Navidrome accumulates more `playCount` and `last played` history
 - For full collection and safe playlist replacement, it uses `getAlbum` and `getPlaylist` in addition to the main playlist and album list endpoints
