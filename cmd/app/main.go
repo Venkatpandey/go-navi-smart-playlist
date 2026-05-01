@@ -12,6 +12,7 @@ import (
 	"go-navi-smart-playlist/internal/collector"
 	"go-navi-smart-playlist/internal/config"
 	"go-navi-smart-playlist/internal/features"
+	"go-navi-smart-playlist/internal/lyrics"
 	"go-navi-smart-playlist/internal/navidrome"
 	"go-navi-smart-playlist/internal/playlist"
 	"go-navi-smart-playlist/internal/state"
@@ -31,6 +32,7 @@ func main() {
 	generator := playlist.NewGenerator(cfg, logger)
 	featureBuilder := features.NewBuilder(logger)
 	stateStore := state.NewStore(cfg.StateFile, cfg.EnableState, logger)
+	lyricsRunner := lyrics.NewRunner(lyrics.NewLRCLIBProvider(), client, cfg.Lyrics, logger, cfg.DryRun)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -39,7 +41,7 @@ func main() {
 		runCtx, cancel := context.WithTimeout(ctx, cfg.RunTimeout)
 		defer cancel()
 
-		if err := run(runCtx, trackCollector, featureBuilder, generator, writer, stateStore, logger); err != nil {
+		if err := run(runCtx, trackCollector, featureBuilder, generator, writer, stateStore, lyricsRunner, logger); err != nil {
 			if errors.Is(err, context.Canceled) {
 				logger.Printf("run canceled: %v", err)
 				return
@@ -73,6 +75,7 @@ func run(
 	generator *playlist.Generator,
 	writer *playlist.Writer,
 	stateStore *state.Store,
+	lyricsRunner *lyrics.Runner,
 	logger *log.Logger,
 ) error {
 	previousState, err := stateStore.Load()
@@ -86,6 +89,10 @@ func run(
 	}
 
 	logger.Printf("collected %d tracks", len(tracks))
+
+	if _, err := lyricsRunner.Run(ctx, tracks); err != nil {
+		logger.Printf("lyrics update warning: %v", err)
+	}
 
 	now := time.Now().UTC()
 	dataset := featureBuilder.Build(tracks, previousState, now)

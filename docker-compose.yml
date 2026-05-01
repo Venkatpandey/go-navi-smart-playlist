@@ -11,5 +11,7 @@ services:
       DRY_RUN: "false"
       ENABLE_STATE_CACHE: "true"
       STATE_FILE: /data/smart-playlist/your-user/state.json
+      ENABLE_LYRICS: "false"
     volumes:
       - /volume1/docker/navidrome/data:/data
+      - /volume1/music:/music:rw

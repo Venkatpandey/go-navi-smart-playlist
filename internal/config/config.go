@@ -19,6 +19,8 @@ const (
 	defaultStateDir      = "/tmp/go-smart-playlist"
 	defaultStateFileName = "state.json"
 	defaultBackfillSize  = 20
+	defaultFetchWorkers  = 10
+	defaultWriteWorkers  = 100
 )
 
 type Config struct {
@@ -35,6 +37,17 @@ type Config struct {
 	StateFile     string
 	EnableState   bool
 	MinBackfill   int
+	Lyrics        LyricsConfig
+}
+
+type LyricsConfig struct {
+	Enabled      bool
+	Overwrite    bool
+	FetchWorkers int
+	WriteWorkers int
+	PathFrom     string
+	PathTo       string
+	TriggerScan  bool
 }
 
 type Weights struct {
@@ -58,6 +71,15 @@ func Load() (Config, error) {
 		StateFile:     resolveStateFile(),
 		EnableState:   getBool("ENABLE_STATE_CACHE", true),
 		MinBackfill:   getInt("MIN_CANDIDATE_BACKFILL", defaultBackfillSize),
+		Lyrics: LyricsConfig{
+			Enabled:      getBool("ENABLE_LYRICS", false),
+			Overwrite:    getBool("LYRICS_OVERWRITE", false),
+			FetchWorkers: getInt("LYRICS_FETCH_WORKERS", defaultFetchWorkers),
+			WriteWorkers: getInt("LYRICS_WRITE_WORKERS", defaultWriteWorkers),
+			PathFrom:     strings.TrimSpace(os.Getenv("LYRICS_PATH_PREFIX_FROM")),
+			PathTo:       strings.TrimSpace(os.Getenv("LYRICS_PATH_PREFIX_TO")),
+			TriggerScan:  getBool("LYRICS_TRIGGER_SCAN", true),
+		},
 		Weights: Weights{
 			PlayCount: getFloat("SCORE_WEIGHT_PLAYCOUNT", 1.0),
 			Recency:   getFloat("SCORE_WEIGHT_RECENCY", 2.0),
@@ -84,6 +106,18 @@ func Load() (Config, error) {
 
 	if cfg.MinBackfill < 0 {
 		return Config{}, fmt.Errorf("MIN_CANDIDATE_BACKFILL must be non-negative, got %d", cfg.MinBackfill)
+	}
+
+	if cfg.Lyrics.FetchWorkers <= 0 {
+		return Config{}, fmt.Errorf("LYRICS_FETCH_WORKERS must be positive, got %d", cfg.Lyrics.FetchWorkers)
+	}
+
+	if cfg.Lyrics.WriteWorkers <= 0 {
+		return Config{}, fmt.Errorf("LYRICS_WRITE_WORKERS must be positive, got %d", cfg.Lyrics.WriteWorkers)
+	}
+
+	if (cfg.Lyrics.PathFrom == "") != (cfg.Lyrics.PathTo == "") {
+		return Config{}, errors.New("LYRICS_PATH_PREFIX_FROM and LYRICS_PATH_PREFIX_TO must be set together")
 	}
 
 	return cfg, nil

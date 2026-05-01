@@ -82,6 +82,8 @@ func normalizeTrack(input navidrome.TrackPayload) model.Track {
 		Title:      safeString(input.Title, "Unknown Title"),
 		Artist:     safeString(input.Artist, "Unknown Artist"),
 		Album:      safeString(input.Album, "Unknown Album"),
+		Path:       strings.TrimSpace(input.Path),
+		Duration:   max(input.Duration, 0),
 		PlayCount:  max(input.PlayCount, 0),
 		LastPlayed: parseTime(input.Played),
 		Created:    parseTime(input.Created),

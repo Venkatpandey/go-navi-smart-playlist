@@ -27,6 +27,7 @@ Lightweight Go microservice for Navidrome that generates smart playlists from li
 - Uses derived features and lightweight vector similarity for better ranking
 - Applies diversity rules with caps per artist and album
 - Creates missing playlists and updates existing ones
+- Optionally fetches lyrics from LRCLIB and writes `.lrc`/`.txt` sidecar files beside track files
 - Runs once on startup, then every 7 days
 - Supports `DRY_RUN=true` to preview playlists without writing changes
 - Uses only the Go standard library
@@ -74,6 +75,13 @@ Optional:
 - `STATE_FILE` default: `/tmp/go-smart-playlist/state.json`
 - `STATE_DIR` optional alternative to `STATE_FILE`
 - `MIN_CANDIDATE_BACKFILL` default: `20`
+- `ENABLE_LYRICS` default: `false`
+- `LYRICS_OVERWRITE` default: `false`
+- `LYRICS_FETCH_WORKERS` default: `10`
+- `LYRICS_WRITE_WORKERS` default: `100`
+- `LYRICS_PATH_PREFIX_FROM` optional path prefix reported by Navidrome
+- `LYRICS_PATH_PREFIX_TO` optional matching path prefix inside this container
+- `LYRICS_TRIGGER_SCAN` default: `true`
 
 ## Installation
 
@@ -190,8 +198,41 @@ services:
 
 This avoids cache collisions because each user writes to a different JSON state file. Playlist names can stay the same because they are created under different Navidrome user accounts.
 
+## Lyrics Sidecars
 
+Set `ENABLE_LYRICS=true` to fetch lyrics from LRCLIB. Synced lyrics are written as `.lrc`; plain lyrics fallback to `.txt`. Existing sidecars are skipped unless `LYRICS_OVERWRITE=true`.
+
+Navidrome must expose real file paths through the Subsonic API:
+
+```yaml
+ND_SUBSONIC_DEFAULTREPORTREALPATH: "true"
 ```
+
+The app must also have write access to the music files path. The simplest setup is to keep Navidrome read-only and mount the same music folder read-write into this app at the same `/music` path:
+
+```yaml
+navidrome:
+  volumes:
+    - /host/music:/music:ro
+
+smart-playlist:
+  environment:
+    ENABLE_LYRICS: "true"
+  volumes:
+    - /host/music:/music:rw
+```
+
+With this setup, no lyrics path prefix mapping is needed. If Navidrome reports a path that differs from this app's writable path, set a prefix mapping:
+
+```yaml
+environment:
+  LYRICS_PATH_PREFIX_FROM: /music
+  LYRICS_PATH_PREFIX_TO: /host-music
+volumes:
+  - /host/music:/host-music:rw
+```
+
+For `/music/Artist/Album/song.flac`, the app writes `/music/Artist/Album/song.lrc`. After writing any lyrics, it calls Navidrome `startScan` unless `LYRICS_TRIGGER_SCAN=false` or `DRY_RUN=true`.
 
 ## Dry Run
 

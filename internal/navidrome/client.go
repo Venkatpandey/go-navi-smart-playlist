@@ -39,6 +39,8 @@ type TrackPayload struct {
 	Title      string `json:"title"`
 	Artist     string `json:"artist"`
 	Album      string `json:"album"`
+	Path       string `json:"path"`
+	Duration   int    `json:"duration"`
 	PlayCount  int    `json:"playCount"`
 	Played     string `json:"played"`
 	Created    string `json:"created"`
@@ -203,6 +205,10 @@ func (c *Client) UpdatePlaylist(ctx context.Context, playlistID string, removeCo
 	}
 
 	return c.post(ctx, "updatePlaylist", query)
+}
+
+func (c *Client) StartScan(ctx context.Context) error {
+	return c.post(ctx, "startScan", nil)
 }
 
 func (c *Client) get(ctx context.Context, endpoint string, query url.Values, target any) error {
