@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +19,13 @@ import (
 	"go-navi-smart-playlist/internal/state"
 )
 
+type userDiscoverer interface {
+	Login(ctx context.Context, username, password string) (string, error)
+	DiscoverUsers(ctx context.Context, token string) ([]navidrome.DiscoveredUser, error)
+}
+
+type userRefresher func(ctx context.Context, cfg config.Config, user config.UserCredential, stateFile string, logger *log.Logger) error
+
 func main() {
 	logger := log.New(os.Stdout, "", log.LstdFlags|log.LUTC)
 
@@ -25,21 +34,20 @@ func main() {
 		logger.Fatalf("load config: %v", err)
 	}
 
-	client := navidrome.NewClient(cfg, logger)
-	trackCollector := collector.NewWithPageSize(client, cfg.AlbumPageSize, logger)
-	writer := playlist.NewWriter(client, logger, cfg.DryRun)
-	generator := playlist.NewGenerator(cfg, logger)
-	featureBuilder := features.NewBuilder(logger)
-	stateStore := state.NewStore(cfg.StateFile, cfg.EnableState, logger)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	runOnce := func() {
-		runCtx, cancel := context.WithTimeout(ctx, cfg.RunTimeout)
-		defer cancel()
-
-		if err := run(runCtx, trackCollector, featureBuilder, generator, writer, stateStore, logger); err != nil {
+		var err error
+		if cfg.MultiUserEnabled {
+			err = runMultiUser(ctx, cfg, logger, navidrome.NewNativeClient(cfg, logger), config.LoadUserCredentials, refreshUser)
+		} else {
+			err = refreshUser(ctx, cfg, config.UserCredential{
+				Username: cfg.Username,
+				Password: cfg.Password,
+			}, cfg.StateFileForUser(cfg.Username), logger)
+		}
+		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				logger.Printf("run canceled: %v", err)
 				return
@@ -66,7 +74,112 @@ func main() {
 	}
 }
 
-func run(
+func refreshUser(
+	ctx context.Context,
+	cfg config.Config,
+	user config.UserCredential,
+	stateFile string,
+	logger *log.Logger,
+) error {
+	runCtx, cancel := context.WithTimeout(ctx, cfg.RunTimeout)
+	defer cancel()
+
+	client := navidrome.NewClientWithCredentials(cfg, user.Username, user.Password, logger)
+	trackCollector := collector.NewWithPageSize(client, cfg.AlbumPageSize, logger)
+	writer := playlist.NewWriter(client, logger, cfg.DryRun)
+	generator := playlist.NewGenerator(cfg, logger)
+	featureBuilder := features.NewBuilder(logger)
+	stateStore := state.NewStore(stateFile, cfg.EnableState, logger)
+
+	return runPlaylistRefresh(runCtx, trackCollector, featureBuilder, generator, writer, stateStore, logger)
+}
+
+func runMultiUser(
+	ctx context.Context,
+	cfg config.Config,
+	logger *log.Logger,
+	discoverer userDiscoverer,
+	loadCredentials func(string) ([]config.UserCredential, error),
+	refresh userRefresher,
+) error {
+	users, err := loadCredentials(cfg.MultiUserConfigFile)
+	if err != nil {
+		return err
+	}
+
+	discoveryCtx, cancel := context.WithTimeout(ctx, cfg.RunTimeout)
+	defer cancel()
+
+	token, err := discoverer.Login(discoveryCtx, cfg.AdminUsername, cfg.AdminPassword)
+	if err != nil {
+		return fmt.Errorf("native admin login failed: %w", err)
+	}
+
+	discovered, err := discoverer.DiscoverUsers(discoveryCtx, token)
+	if err != nil {
+		return fmt.Errorf("native user discovery failed: %w", err)
+	}
+
+	credentials := make(map[string]config.UserCredential, len(users))
+	for _, user := range users {
+		if !user.IsEnabled() {
+			continue
+		}
+		credentials[strings.ToLower(user.Username)] = user
+	}
+
+	matched := make(map[string]struct{}, len(credentials))
+	successCount := 0
+	failureCount := 0
+
+	for _, discoveredUser := range discovered {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if discoveredUser.Enabled != nil && !*discoveredUser.Enabled {
+			logger.Printf("skipping disabled user %q discovered via native API", discoveredUser.Username)
+			continue
+		}
+
+		userLogger := prefixedLogger(logger, discoveredUser.Username)
+		credential, ok := credentials[strings.ToLower(discoveredUser.Username)]
+		if !ok {
+			userLogger.Printf("warning: discovered user has no enabled credentials entry, skipping")
+			failureCount++
+			continue
+		}
+
+		matched[strings.ToLower(discoveredUser.Username)] = struct{}{}
+		if err := refresh(ctx, cfg, credential, cfg.StateFileForUser(credential.Username), userLogger); err != nil {
+			userLogger.Printf("refresh failed: %v", err)
+			failureCount++
+			continue
+		}
+
+		successCount++
+	}
+
+	for _, user := range users {
+		if _, ok := matched[strings.ToLower(user.Username)]; ok {
+			continue
+		}
+		if !user.IsEnabled() {
+			continue
+		}
+
+		logger.Printf("warning: credentials entry %q not found in discovered Navidrome users, ignoring", user.Username)
+	}
+
+	logger.Printf("multi-user refresh complete: success=%d failed=%d", successCount, failureCount)
+	if failureCount > 0 {
+		return fmt.Errorf("multi-user refresh incomplete: success=%d failed=%d", successCount, failureCount)
+	}
+
+	return nil
+}
+
+func runPlaylistRefresh(
 	ctx context.Context,
 	trackCollector *collector.Collector,
 	featureBuilder *features.Builder,
@@ -102,6 +215,10 @@ func run(
 
 	logger.Printf("playlist refresh complete")
 	return nil
+}
+
+func prefixedLogger(parent *log.Logger, username string) *log.Logger {
+	return log.New(parent.Writer(), parent.Prefix()+"["+username+"] ", parent.Flags())
 }
 
 func buildHistoryState(

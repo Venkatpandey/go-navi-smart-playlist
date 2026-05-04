@@ -135,6 +135,18 @@ func NewClient(cfg config.Config, logger *log.Logger) *Client {
 	}
 }
 
+func NewClientWithCredentials(cfg config.Config, username, password string, logger *log.Logger) *Client {
+	return &Client{
+		baseURL:    cfg.BaseURL,
+		username:   username,
+		password:   password,
+		clientName: cfg.ClientName,
+		apiVersion: cfg.APIVersion,
+		httpClient: &http.Client{Timeout: cfg.RunTimeout},
+		logger:     logger,
+	}
+}
+
 func (c *Client) GetAlbumList2(ctx context.Context, size, offset int) ([]Album, error) {
 	query := url.Values{}
 	query.Set("type", "alphabeticalByName")

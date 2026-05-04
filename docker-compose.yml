@@ -5,11 +5,14 @@ services:
     restart: unless-stopped
     environment:
       NAVIDROME_URL: http://navidrome:4533
-      NAVIDROME_USER: your-user
-      NAVIDROME_PASSWORD: your-password
+      MULTI_USER_ENABLED: "true"
+      NAVIDROME_ADMIN_USER: admin
+      NAVIDROME_ADMIN_PASSWORD: admin-password
+      MULTI_USER_CONFIG_FILE: /run/secrets/navidrome-users.json
       PLAYLIST_SIZE: "50"
       DRY_RUN: "false"
       ENABLE_STATE_CACHE: "true"
-      STATE_FILE: /data/smart-playlist/your-user/state.json
+      STATE_DIR: /data/smart-playlist
     volumes:
       - /volume1/docker/navidrome/data:/data
+      - ./secrets/navidrome-users.json:/run/secrets/navidrome-users.json:ro
