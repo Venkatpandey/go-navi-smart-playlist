@@ -99,6 +99,51 @@ Optional:
 - `STATE_DIR` optional alternative to `STATE_FILE`
 - `MIN_CANDIDATE_BACKFILL` default: `20`
 
+### Recommendation Weight Tuning
+
+The score weights provide coarse global tuning for playlists that use the shared base score:
+
+- `SCORE_WEIGHT_PLAYCOUNT`: increase to favor familiar and frequently played tracks; decrease to favor exploration
+- `SCORE_WEIGHT_RECENCY`: increase to favor tracks played recently
+- `SCORE_WEIGHT_FRESHNESS`: increase to favor tracks added to the library recently
+- `SCORE_DECAY_DAYS`: controls how long recency and freshness remain influential; larger values create a wider time window
+
+All weight values must be finite and non-negative. `SCORE_DECAY_DAYS` must be positive. The signals multiplied by these weights are normalized, so changing a weight has a predictable bounded effect.
+
+Balanced defaults:
+
+```yaml
+environment:
+  SCORE_WEIGHT_PLAYCOUNT: "1.0"
+  SCORE_WEIGHT_RECENCY: "2.0"
+  SCORE_WEIGHT_FRESHNESS: "1.5"
+  SCORE_DECAY_DAYS: "45"
+```
+
+More discovery and recently added music:
+
+```yaml
+environment:
+  SCORE_WEIGHT_PLAYCOUNT: "0.5"
+  SCORE_WEIGHT_RECENCY: "1.2"
+  SCORE_WEIGHT_FRESHNESS: "2.2"
+  SCORE_DECAY_DAYS: "60"
+```
+
+More familiar and recently played music:
+
+```yaml
+environment:
+  SCORE_WEIGHT_PLAYCOUNT: "1.7"
+  SCORE_WEIGHT_RECENCY: "2.3"
+  SCORE_WEIGHT_FRESHNESS: "0.8"
+  SCORE_DECAY_DAYS: "60"
+```
+
+These settings affect the original recommendation playlists, similarity playlists, `Quick Mix`, and `Longform`. They do not change the dedicated formulas or eligibility rules for `Fresh & Unplayed`, `Forgotten Favorites`, `Rising This Week`, or `Deep Cuts`.
+
+Keep `ENABLE_STATE_CACHE=true` for useful play-count deltas, stability, and playlist history. Evaluate a tuning change over at least two generation cycles because the first run has no previous snapshot. Each run writes the newly generated playlists to Navidrome.
+
 ## Installation
 
 Clone the repository and build it locally:
