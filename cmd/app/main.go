@@ -27,7 +27,7 @@ func main() {
 
 	client := navidrome.NewClient(cfg, logger)
 	trackCollector := collector.NewWithPageSize(client, cfg.AlbumPageSize, logger)
-	writer := playlist.NewWriter(client, logger, cfg.DryRun)
+	writer := playlist.NewWriter(client, logger, cfg.Username)
 	generator := playlist.NewGenerator(cfg, logger)
 	featureBuilder := features.NewBuilder(logger)
 	stateStore := state.NewStore(cfg.StateFile, cfg.EnableState, logger)
@@ -138,6 +138,7 @@ func buildHistoryState(
 				RecencyTrend:        item.RecencyTrendScore,
 				RepeatFatigue:       item.RepeatFatigueScore,
 				ArtistSaturation:    item.ArtistSaturation,
+				ArtistAffinity:      item.ArtistAffinity,
 				AlbumSaturation:     item.AlbumSaturation,
 				NoveltyScore:        item.NoveltyScore,
 				StabilityScore:      item.StabilityScore,

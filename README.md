@@ -13,7 +13,7 @@ Lightweight Go microservice for Navidrome that generates smart playlists from li
 ## Features
 
 - Fetches the full music library from Navidrome and builds an in-memory track dataset
-- Generates smart playlists with simple scoring logic
+- Generates smart playlists with recipe-specific eligibility, scoring, rotation, and diversity rules
 - Includes built-in playlists:
   - `Discover Weekly`
   - `Rediscover`
@@ -23,13 +23,38 @@ Lightweight Go microservice for Navidrome that generates smart playlists from li
   - `Comfort Shuffle`
   - `More Like Hidden Gems`
   - `Artist Adjacent Comfort`
+  - `Fresh & Unplayed`
+  - `Forgotten Favorites`
+  - `Rising This Week`
+  - `Deep Cuts`
+  - `Quick Mix`
+  - `Longform`
 - Persists a tiny local state cache to improve future recommendations
 - Uses derived features and lightweight vector similarity for better ranking
 - Applies diversity rules with caps per artist and album
+- Applies playlist-specific eligibility rules so each playlist keeps its intended meaning
+- Uses deterministic weekly variation to rotate discovery and shuffle playlists
+- Uses genre matches when available and duration metadata for session-length playlists
 - Creates missing playlists and updates existing ones
 - Runs once on startup, then every 7 days
-- Supports `DRY_RUN=true` to preview playlists without writing changes
 - Uses only the Go standard library
+
+## Playlist Catalog
+
+- `Discover Weekly`: low-play, unplayed, or recently added tracks with weekly rotation
+- `Rediscover`: tracks played before, but not during the last 45 days
+- `Top This Month`: tracks played during the last 31 days, weighted toward rising play counts
+- `Hidden Gems`: low-play tracks, plus highly rated or starred exceptions
+- `Long Time No See`: previously played tracks absent for at least 120 days
+- `Comfort Shuffle`: familiar favorites with stronger weekly variation
+- `More Like Hidden Gems`: behaviorally and genre-adjacent tracks, excluding every source track
+- `Artist Adjacent Comfort`: comfort-adjacent tracks from different artists
+- `Fresh & Unplayed`: tracks added during the last 180 days and never played
+- `Forgotten Favorites`: starred, highly rated, or historically popular tracks absent for at least 180 days
+- `Rising This Week`: tracks with new plays during the current collection interval and activity in the last 14 days
+- `Deep Cuts`: low-play tracks from artists with strong listening history
+- `Quick Mix`: tracks no longer than four minutes
+- `Longform`: tracks at least eight minutes long
 
 ## Project Layout
 
@@ -64,7 +89,6 @@ Optional:
 
 - `PLAYLIST_SIZE` default: `50`
 - `ALBUM_PAGE_SIZE` default: `200`
-- `DRY_RUN` default: `false`
 - `RUN_TIMEOUT` default: `15m`
 - `SCORE_WEIGHT_PLAYCOUNT` default: `1.0`
 - `SCORE_WEIGHT_RECENCY` default: `2.0`
@@ -74,6 +98,51 @@ Optional:
 - `STATE_FILE` default: `/tmp/go-smart-playlist/state.json`
 - `STATE_DIR` optional alternative to `STATE_FILE`
 - `MIN_CANDIDATE_BACKFILL` default: `20`
+
+### Recommendation Weight Tuning
+
+The score weights provide coarse global tuning for playlists that use the shared base score:
+
+- `SCORE_WEIGHT_PLAYCOUNT`: increase to favor familiar and frequently played tracks; decrease to favor exploration
+- `SCORE_WEIGHT_RECENCY`: increase to favor tracks played recently
+- `SCORE_WEIGHT_FRESHNESS`: increase to favor tracks added to the library recently
+- `SCORE_DECAY_DAYS`: controls how long recency and freshness remain influential; larger values create a wider time window
+
+All weight values must be finite and non-negative. `SCORE_DECAY_DAYS` must be positive. The signals multiplied by these weights are normalized, so changing a weight has a predictable bounded effect.
+
+Balanced defaults:
+
+```yaml
+environment:
+  SCORE_WEIGHT_PLAYCOUNT: "1.0"
+  SCORE_WEIGHT_RECENCY: "2.0"
+  SCORE_WEIGHT_FRESHNESS: "1.5"
+  SCORE_DECAY_DAYS: "45"
+```
+
+More discovery and recently added music:
+
+```yaml
+environment:
+  SCORE_WEIGHT_PLAYCOUNT: "0.5"
+  SCORE_WEIGHT_RECENCY: "1.2"
+  SCORE_WEIGHT_FRESHNESS: "2.2"
+  SCORE_DECAY_DAYS: "60"
+```
+
+More familiar and recently played music:
+
+```yaml
+environment:
+  SCORE_WEIGHT_PLAYCOUNT: "1.7"
+  SCORE_WEIGHT_RECENCY: "2.3"
+  SCORE_WEIGHT_FRESHNESS: "0.8"
+  SCORE_DECAY_DAYS: "60"
+```
+
+These settings affect the original recommendation playlists, similarity playlists, `Quick Mix`, and `Longform`. They do not change the dedicated formulas or eligibility rules for `Fresh & Unplayed`, `Forgotten Favorites`, `Rising This Week`, or `Deep Cuts`.
+
+Keep `ENABLE_STATE_CACHE=true` for useful play-count deltas, stability, and playlist history. Evaluate a tuning change over at least two generation cycles because the first run has no previous snapshot. Each run writes the newly generated playlists to Navidrome.
 
 ## Installation
 
@@ -166,7 +235,6 @@ services:
       NAVIDROME_USER: alice
       NAVIDROME_PASSWORD: alice-password
       PLAYLIST_SIZE: "50"
-      DRY_RUN: "false"
       ENABLE_STATE_CACHE: "true"
       STATE_FILE: /data/smart-playlist/alice/state.json
     volumes:
@@ -181,7 +249,6 @@ services:
       NAVIDROME_USER: bob
       NAVIDROME_PASSWORD: bob-password
       PLAYLIST_SIZE: "50"
-      DRY_RUN: "false"
       ENABLE_STATE_CACHE: "true"
       STATE_FILE: /data/smart-playlist/bob/state.json
     volumes:
@@ -189,19 +256,6 @@ services:
 ```
 
 This avoids cache collisions because each user writes to a different JSON state file. Playlist names can stay the same because they are created under different Navidrome user accounts.
-
-
-```
-
-## Dry Run
-
-To preview generated playlists without modifying Navidrome:
-
-```
-DRY_RUN=true NAVIDROME_URL=http://192.168.0.25:4533 NAVIDROME_USER=user-name NAVIDROME_PASSWORD=your-password go run ./cmd/app
-```
-
-This logs playlist names and track IDs instead of creating or updating playlists.
 
 ## Notes
 

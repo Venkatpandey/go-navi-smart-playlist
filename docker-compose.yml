@@ -8,7 +8,6 @@ services:
       NAVIDROME_USER: your-user
       NAVIDROME_PASSWORD: your-password
       PLAYLIST_SIZE: "50"
-      DRY_RUN: "false"
       ENABLE_STATE_CACHE: "true"
       STATE_FILE: /data/smart-playlist/your-user/state.json
     volumes:

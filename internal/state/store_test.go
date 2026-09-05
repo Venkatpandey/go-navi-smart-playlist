@@ -2,6 +2,7 @@ package state
 
 import (
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,6 +48,43 @@ func TestLoadCorruptStateFallsBackToEmpty(t *testing.T) {
 	}
 	if len(output.Tracks) != 0 {
 		t.Fatalf("expected empty state on corrupt load, got %d tracks", len(output.Tracks))
+	}
+}
+
+func TestFailedSaveKeepsPreviousState(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "state.json")
+	store := NewStore(path, true, log.New(testWriter{t}, "", 0))
+
+	initial := NewHistoryState()
+	initial.Tracks["track-1"] = TrackSnapshot{ID: "track-1", PlayCount: 7}
+	if err := store.Save(initial); err != nil {
+		t.Fatalf("save initial state: %v", err)
+	}
+
+	invalid := NewHistoryState()
+	invalid.Tracks["bad"] = TrackSnapshot{
+		ID:      "bad",
+		Derived: DerivedFeatureSnapshot{Vector: []float64{math.NaN()}},
+	}
+	if err := store.Save(invalid); err == nil {
+		t.Fatalf("expected invalid state save to fail")
+	}
+
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load previous state: %v", err)
+	}
+	if loaded.Tracks["track-1"].PlayCount != 7 {
+		t.Fatalf("previous state was replaced after failed save: %+v", loaded)
+	}
+
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read state directory: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "state.json" {
+		t.Fatalf("temporary state file not cleaned up: %+v", entries)
 	}
 }
 
