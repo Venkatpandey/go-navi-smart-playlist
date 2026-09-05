@@ -63,6 +63,9 @@ func TestBuildDerivesExpectedSignals(t *testing.T) {
 	if rising.StabilityScore <= 0 {
 		t.Fatalf("expected positive stability score, got %.4f", rising.StabilityScore)
 	}
+	if rising.ArtistAffinity != 1 {
+		t.Fatalf("expected strongest artist affinity, got %.4f", rising.ArtistAffinity)
+	}
 
 	newTrack, ok := dataset.Get("new")
 	if !ok {
@@ -73,6 +76,9 @@ func TestBuildDerivesExpectedSignals(t *testing.T) {
 	}
 	if newTrack.NoveltyScore <= rising.NoveltyScore {
 		t.Fatalf("expected new track novelty %.4f to exceed rising track novelty %.4f", newTrack.NoveltyScore, rising.NoveltyScore)
+	}
+	if newTrack.ArtistAffinity != 0 {
+		t.Fatalf("expected unplayed artist affinity 0, got %.4f", newTrack.ArtistAffinity)
 	}
 }
 

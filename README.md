@@ -13,7 +13,7 @@ Lightweight Go microservice for Navidrome that generates smart playlists from li
 ## Features
 
 - Fetches the full music library from Navidrome and builds an in-memory track dataset
-- Generates smart playlists with simple scoring logic
+- Generates smart playlists with recipe-specific eligibility, scoring, rotation, and diversity rules
 - Includes built-in playlists:
   - `Discover Weekly`
   - `Rediscover`
@@ -23,13 +23,38 @@ Lightweight Go microservice for Navidrome that generates smart playlists from li
   - `Comfort Shuffle`
   - `More Like Hidden Gems`
   - `Artist Adjacent Comfort`
+  - `Fresh & Unplayed`
+  - `Forgotten Favorites`
+  - `Rising This Week`
+  - `Deep Cuts`
+  - `Quick Mix`
+  - `Longform`
 - Persists a tiny local state cache to improve future recommendations
 - Uses derived features and lightweight vector similarity for better ranking
 - Applies diversity rules with caps per artist and album
+- Applies playlist-specific eligibility rules so each playlist keeps its intended meaning
+- Uses deterministic weekly variation to rotate discovery and shuffle playlists
+- Uses genre matches when available and duration metadata for session-length playlists
 - Creates missing playlists and updates existing ones
 - Runs once on startup, then every 7 days
-- Supports `DRY_RUN=true` to preview playlists without writing changes
 - Uses only the Go standard library
+
+## Playlist Catalog
+
+- `Discover Weekly`: low-play, unplayed, or recently added tracks with weekly rotation
+- `Rediscover`: tracks played before, but not during the last 45 days
+- `Top This Month`: tracks played during the last 31 days, weighted toward rising play counts
+- `Hidden Gems`: low-play tracks, plus highly rated or starred exceptions
+- `Long Time No See`: previously played tracks absent for at least 120 days
+- `Comfort Shuffle`: familiar favorites with stronger weekly variation
+- `More Like Hidden Gems`: behaviorally and genre-adjacent tracks, excluding every source track
+- `Artist Adjacent Comfort`: comfort-adjacent tracks from different artists
+- `Fresh & Unplayed`: tracks added during the last 180 days and never played
+- `Forgotten Favorites`: starred, highly rated, or historically popular tracks absent for at least 180 days
+- `Rising This Week`: tracks with new plays during the current collection interval and activity in the last 14 days
+- `Deep Cuts`: low-play tracks from artists with strong listening history
+- `Quick Mix`: tracks no longer than four minutes
+- `Longform`: tracks at least eight minutes long
 
 ## Project Layout
 
@@ -64,7 +89,6 @@ Optional:
 
 - `PLAYLIST_SIZE` default: `50`
 - `ALBUM_PAGE_SIZE` default: `200`
-- `DRY_RUN` default: `false`
 - `RUN_TIMEOUT` default: `15m`
 - `SCORE_WEIGHT_PLAYCOUNT` default: `1.0`
 - `SCORE_WEIGHT_RECENCY` default: `2.0`
@@ -166,7 +190,6 @@ services:
       NAVIDROME_USER: alice
       NAVIDROME_PASSWORD: alice-password
       PLAYLIST_SIZE: "50"
-      DRY_RUN: "false"
       ENABLE_STATE_CACHE: "true"
       STATE_FILE: /data/smart-playlist/alice/state.json
     volumes:
@@ -181,7 +204,6 @@ services:
       NAVIDROME_USER: bob
       NAVIDROME_PASSWORD: bob-password
       PLAYLIST_SIZE: "50"
-      DRY_RUN: "false"
       ENABLE_STATE_CACHE: "true"
       STATE_FILE: /data/smart-playlist/bob/state.json
     volumes:
@@ -189,19 +211,6 @@ services:
 ```
 
 This avoids cache collisions because each user writes to a different JSON state file. Playlist names can stay the same because they are created under different Navidrome user accounts.
-
-
-```
-
-## Dry Run
-
-To preview generated playlists without modifying Navidrome:
-
-```
-DRY_RUN=true NAVIDROME_URL=http://192.168.0.25:4533 NAVIDROME_USER=user-name NAVIDROME_PASSWORD=your-password go run ./cmd/app
-```
-
-This logs playlist names and track IDs instead of creating or updating playlists.
 
 ## Notes
 

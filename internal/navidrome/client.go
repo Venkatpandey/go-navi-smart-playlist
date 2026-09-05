@@ -39,6 +39,8 @@ type TrackPayload struct {
 	Title      string `json:"title"`
 	Artist     string `json:"artist"`
 	Album      string `json:"album"`
+	Genre      string `json:"genre"`
+	Duration   int    `json:"duration"`
 	PlayCount  int    `json:"playCount"`
 	Played     string `json:"played"`
 	Created    string `json:"created"`

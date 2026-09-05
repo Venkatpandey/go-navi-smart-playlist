@@ -20,6 +20,7 @@ type TrackFeatures struct {
 	RecencyTrendScore   float64
 	RepeatFatigueScore  float64
 	ArtistSaturation    float64
+	ArtistAffinity      float64
 	AlbumSaturation     float64
 	NoveltyScore        float64
 	StabilityScore      float64
@@ -38,6 +39,7 @@ type Stats struct {
 	TracksWithLastPlayed int
 	TracksWithPlayCount  int
 	MaxArtistCount       int
+	MaxArtistPlayCount   int
 	MaxAlbumCount        int
 }
 
@@ -52,12 +54,14 @@ func NewBuilder(logger *log.Logger) *Builder {
 func (b *Builder) Build(tracks []model.Track, previous *state.HistoryState, now time.Time) Dataset {
 	playCounts := make([]int, 0, len(tracks))
 	artistCounts := make(map[string]int)
+	artistPlayCounts := make(map[string]int)
 	albumCounts := make(map[string]int)
 	stats := Stats{TotalTracks: len(tracks)}
 
 	for _, track := range tracks {
 		playCounts = append(playCounts, track.PlayCount)
 		artistCounts[groupKey(track.Artist)]++
+		artistPlayCounts[groupKey(track.Artist)] += track.PlayCount
 		albumCounts[groupKey(track.Album)]++
 		if !track.LastPlayed.IsZero() {
 			stats.TracksWithLastPlayed++
@@ -69,6 +73,7 @@ func (b *Builder) Build(tracks []model.Track, previous *state.HistoryState, now 
 
 	slices.Sort(playCounts)
 	stats.MaxArtistCount = maxMapValue(artistCounts)
+	stats.MaxArtistPlayCount = maxMapValue(artistPlayCounts)
 	stats.MaxAlbumCount = maxMapValue(albumCounts)
 
 	items := make([]TrackFeatures, 0, len(tracks))
@@ -89,6 +94,7 @@ func (b *Builder) Build(tracks []model.Track, previous *state.HistoryState, now 
 		recencyTrend := clamp01(playDelta/5.0)*recencyFactor + clamp01(recencyFactor*0.25)
 		repeatFatigue := clamp01(recencyFactor*0.8 + clamp01(playDelta/6.0)*0.6)
 		artistSaturation := normalizeCount(artistCounts[groupKey(track.Artist)], stats.MaxArtistCount)
+		artistAffinity := normalizeLogCount(artistPlayCounts[groupKey(track.Artist)], stats.MaxArtistPlayCount)
 		albumSaturation := normalizeCount(albumCounts[groupKey(track.Album)], stats.MaxAlbumCount)
 		noveltyScore := clamp01((1-playPercentile)*0.7 + freshnessFactor*0.3)
 		stabilityScore := clamp01(float64(previousSnapshot.SeenCount) / 5.0)
@@ -104,6 +110,7 @@ func (b *Builder) Build(tracks []model.Track, previous *state.HistoryState, now 
 			recencyTrend,
 			1 - repeatFatigue,
 			1 - artistSaturation,
+			artistAffinity,
 			1 - albumSaturation,
 			noveltyScore,
 			stabilityScore,
@@ -120,6 +127,7 @@ func (b *Builder) Build(tracks []model.Track, previous *state.HistoryState, now 
 			RecencyTrendScore:   clamp01(recencyTrend),
 			RepeatFatigueScore:  repeatFatigue,
 			ArtistSaturation:    artistSaturation,
+			ArtistAffinity:      artistAffinity,
 			AlbumSaturation:     albumSaturation,
 			NoveltyScore:        noveltyScore,
 			StabilityScore:      stabilityScore,
@@ -193,6 +201,14 @@ func normalizeCount(value, maxValue int) float64 {
 		return 0
 	}
 	return clamp01(float64(value-1) / float64(maxValue-1))
+}
+
+func normalizeLogCount(value, maxValue int) float64 {
+	if value <= 0 || maxValue <= 0 {
+		return 0
+	}
+
+	return clamp01(math.Log1p(float64(value)) / math.Log1p(float64(maxValue)))
 }
 
 func maxMapValue(items map[string]int) int {

@@ -16,9 +16,9 @@ func New(weights config.Weights) *Engine {
 }
 
 func (e *Engine) BaseScore(track features.TrackFeatures) float64 {
-	playCountTerm := math.Log(float64(track.Track.PlayCount) + 1)
+	playCountTerm := track.PlayCountPercentile
 	if track.Track.PlayCount == 0 {
-		playCountTerm += 0.35
+		playCountTerm = 0.15
 	}
 
 	recencyScore := math.Exp(-track.DaysSinceLastPlayed / e.weights.DecayDays)
@@ -31,6 +31,7 @@ func (e *Engine) BaseScore(track features.TrackFeatures) float64 {
 		0.7*track.NoveltyScore +
 		0.6*track.RecencyTrendScore +
 		0.3*track.StabilityScore +
+		0.2*track.ArtistAffinity +
 		0.25*ratingScore +
 		0.2*boolFloat(track.Track.Starred) -
 		0.75*track.RepeatFatigueScore -

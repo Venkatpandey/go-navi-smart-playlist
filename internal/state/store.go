@@ -38,6 +38,7 @@ type DerivedFeatureSnapshot struct {
 	RecencyTrend        float64   `json:"recencyTrend"`
 	RepeatFatigue       float64   `json:"repeatFatigue"`
 	ArtistSaturation    float64   `json:"artistSaturation"`
+	ArtistAffinity      float64   `json:"artistAffinity"`
 	AlbumSaturation     float64   `json:"albumSaturation"`
 	NoveltyScore        float64   `json:"noveltyScore"`
 	StabilityScore      float64   `json:"stabilityScore"`
@@ -113,16 +114,28 @@ func (s *Store) Save(payload *HistoryState) error {
 		return fmt.Errorf("create state directory: %w", err)
 	}
 
-	file, err := os.Create(s.path)
+	file, err := os.CreateTemp(filepath.Dir(s.path), "."+filepath.Base(s.path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("create state file: %w", err)
+		return fmt.Errorf("create temporary state file: %w", err)
 	}
-	defer file.Close()
+	temporaryPath := file.Name()
+	defer os.Remove(temporaryPath)
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(payload); err != nil {
+		_ = file.Close()
 		return fmt.Errorf("encode state file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync state file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close state file: %w", err)
+	}
+	if err := os.Rename(temporaryPath, s.path); err != nil {
+		return fmt.Errorf("replace state file: %w", err)
 	}
 
 	return nil
