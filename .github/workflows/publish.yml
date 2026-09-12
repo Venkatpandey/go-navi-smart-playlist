@@ -1,9 +1,6 @@
 name: Publish Docker Image
 
 on:
-  pull_request:
-    branches:
-      - main
   push:
     branches:
       - main
@@ -38,7 +35,6 @@ jobs:
         run: go test -race ./...
 
   docker:
-    if: github.event_name != 'pull_request'
     needs: quality
     runs-on: ubuntu-latest
     steps:
