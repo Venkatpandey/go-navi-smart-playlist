@@ -39,11 +39,7 @@ func (w *Writer) Upsert(ctx context.Context, name string, tracks []model.Track) 
 		return fmt.Errorf("get playlists: %w", err)
 	}
 
-	existingIndex := slices.IndexFunc(playlists, func(item navidrome.Playlist) bool {
-		nameMatches := strings.EqualFold(item.Name, name)
-		ownerMatches := w.owner == "" || item.Owner == "" || strings.EqualFold(item.Owner, w.owner)
-		return nameMatches && ownerMatches
-	})
+	existingIndex := w.matchingPlaylistIndex(playlists, name)
 
 	if existingIndex >= 0 {
 		removeCount := playlists[existingIndex].SongCount
@@ -77,6 +73,40 @@ func (w *Writer) Upsert(ctx context.Context, name string, tracks []model.Track) 
 
 	w.logger.Printf("created playlist %q with %d tracks", name, len(songIDs))
 	return nil
+}
+
+// CreateOnce creates an immutable playlist and leaves an existing playlist with
+// the same owner and name untouched. This keeps completed recaps unchanged.
+func (w *Writer) CreateOnce(ctx context.Context, name string, tracks []model.Track) error {
+	songIDs := extractSongIDs(tracks)
+	if len(songIDs) == 0 {
+		w.logger.Printf("playlist %q has no tracks, skipping create", name)
+		return nil
+	}
+
+	playlists, err := w.client.GetPlaylists(ctx)
+	if err != nil {
+		return fmt.Errorf("get playlists: %w", err)
+	}
+	if w.matchingPlaylistIndex(playlists, name) >= 0 {
+		w.logger.Printf("playlist %q already exists, leaving it unchanged", name)
+		return nil
+	}
+
+	if err := w.client.CreatePlaylist(ctx, name, songIDs); err != nil {
+		return fmt.Errorf("create playlist %q: %w", name, err)
+	}
+
+	w.logger.Printf("created playlist %q with %d tracks", name, len(songIDs))
+	return nil
+}
+
+func (w *Writer) matchingPlaylistIndex(playlists []navidrome.Playlist, name string) int {
+	return slices.IndexFunc(playlists, func(item navidrome.Playlist) bool {
+		nameMatches := strings.EqualFold(item.Name, name)
+		ownerMatches := w.owner == "" || item.Owner == "" || strings.EqualFold(item.Owner, w.owner)
+		return nameMatches && ownerMatches
+	})
 }
 
 func extractSongIDs(tracks []model.Track) []string {

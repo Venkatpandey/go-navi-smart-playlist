@@ -17,6 +17,10 @@ func TestStoreRoundTrip(t *testing.T) {
 	input.UpdatedAt = time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC)
 	input.Tracks["track-1"] = TrackSnapshot{ID: "track-1", PlayCount: 4, SeenCount: 2}
 	input.Playlists["Mix"] = PlaylistSnapshot{TrackIDs: []string{"track-1"}}
+	input.Seasonal = SeasonalSnapshot{
+		Period:     "2026-Q2",
+		PlayCounts: map[string]int{"track-1": 3},
+	}
 
 	if err := store.Save(input); err != nil {
 		t.Fatalf("save: %v", err)
@@ -32,6 +36,25 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if !output.PlaylistContains("Mix", "track-1") {
 		t.Fatalf("expected playlist membership to round-trip")
+	}
+	if output.Seasonal.Period != "2026-Q2" || output.Seasonal.PlayCounts["track-1"] != 3 {
+		t.Fatalf("expected seasonal activity to round-trip, got %+v", output.Seasonal)
+	}
+}
+
+func TestLoadVersionOneStateInitializesSeasonalActivity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"tracks":{},"playlists":{}}`), 0o644); err != nil {
+		t.Fatalf("write old state: %v", err)
+	}
+
+	store := NewStore(path, true, log.New(testWriter{t}, "", 0))
+	output, err := store.Load()
+	if err != nil {
+		t.Fatalf("load old state: %v", err)
+	}
+	if output.Seasonal.PlayCounts == nil {
+		t.Fatalf("expected seasonal play counts to be initialized")
 	}
 }
 

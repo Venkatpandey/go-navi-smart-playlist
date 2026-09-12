@@ -89,3 +89,49 @@ func TestWriterPrefersMatchingOwner(t *testing.T) {
 		t.Fatalf("expected own playlist update, got %+v", client)
 	}
 }
+
+func TestWriterCreateOnceLeavesExistingRecapUnchanged(t *testing.T) {
+	client := &fakePlaylistClient{
+		playlists: []navidrome.Playlist{{
+			ID:        "summer-recap",
+			Name:      "your summer 2026 recap",
+			Owner:     "alice",
+			SongCount: 50,
+		}},
+	}
+	writer := NewWriter(client, log.New(testWriter{t}, "", 0), "alice")
+
+	if err := writer.CreateOnce(
+		context.Background(),
+		"your summer 2026 recap",
+		[]model.Track{{ID: "new-song"}},
+	); err != nil {
+		t.Fatalf("create once: %v", err)
+	}
+	if client.updatedID != "" || client.createdName != "" {
+		t.Fatalf("existing recap was changed: %+v", client)
+	}
+}
+
+func TestWriterCreateOnceCreatesNewRecapForOwner(t *testing.T) {
+	client := &fakePlaylistClient{
+		playlists: []navidrome.Playlist{{
+			ID:        "theirs",
+			Name:      "your summer 2026 recap",
+			Owner:     "bob",
+			SongCount: 50,
+		}},
+	}
+	writer := NewWriter(client, log.New(testWriter{t}, "", 0), "alice")
+
+	if err := writer.CreateOnce(
+		context.Background(),
+		"your summer 2026 recap",
+		[]model.Track{{ID: "song-1"}, {ID: "song-2"}},
+	); err != nil {
+		t.Fatalf("create once: %v", err)
+	}
+	if client.createdName != "your summer 2026 recap" || len(client.createdIDs) != 2 {
+		t.Fatalf("expected new recap for owner, got %+v", client)
+	}
+}

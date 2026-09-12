@@ -36,6 +36,7 @@ Lightweight Go microservice for Navidrome that generates smart playlists from li
 - Uses deterministic weekly variation to rotate discovery and shuffle playlists
 - Uses genre matches when available and duration metadata for session-length playlists
 - Creates missing playlists and updates existing ones
+- Creates a new immutable seasonal recap after each calendar quarter and keeps earlier recaps
 - Runs once on startup, then every 7 days
 - Uses only the Go standard library
 
@@ -55,6 +56,7 @@ Lightweight Go microservice for Navidrome that generates smart playlists from li
 - `Deep Cuts`: low-play tracks from artists with strong listening history
 - `Quick Mix`: tracks no longer than four minutes
 - `Longform`: tracks at least eight minutes long
+- `your <season> <year> recap`: up to 50 tracks ordered by plays collected during the completed calendar quarter (`winter` Q1, `spring` Q2, `summer` Q3, `autumn` Q4)
 
 ## Project Layout
 
@@ -142,7 +144,9 @@ environment:
 
 These settings affect the original recommendation playlists, similarity playlists, `Quick Mix`, and `Longform`. They do not change the dedicated formulas or eligibility rules for `Fresh & Unplayed`, `Forgotten Favorites`, `Rising This Week`, or `Deep Cuts`.
 
-Keep `ENABLE_STATE_CACHE=true` for useful play-count deltas, stability, and playlist history. Evaluate a tuning change over at least two generation cycles because the first run has no previous snapshot. Each run writes the newly generated playlists to Navidrome.
+Keep `ENABLE_STATE_CACHE=true` for useful play-count deltas, stability, playlist history, and seasonal recaps. Evaluate a tuning change over at least two generation cycles because the first run has no previous snapshot. Each run writes the newly generated playlists to Navidrome.
+
+Seasonal activity starts from the first saved baseline; lifetime play counts are not imported into the current quarter. On the first weekly run after a quarter ends, the service creates that quarter's recap. A completed recap is never updated or deleted, and future quarters use new playlist names. Keep the state file persistent across restarts so activity is not lost.
 
 ## Installation
 

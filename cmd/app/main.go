@@ -90,13 +90,29 @@ func run(
 	now := time.Now().UTC()
 	dataset := featureBuilder.Build(tracks, previousState, now)
 	playlists := generator.Generate(dataset, previousState, now)
+	seasonalUpdate := generator.UpdateSeasonal(dataset, previousState, now)
 	for _, definition := range playlists {
 		if err := writer.Upsert(ctx, definition.Name, definition.Tracks); err != nil {
 			return err
 		}
 	}
+	if seasonalUpdate.Definition != nil {
+		if err := writer.CreateOnce(
+			ctx,
+			seasonalUpdate.Definition.Name,
+			seasonalUpdate.Definition.Tracks,
+		); err != nil {
+			return err
+		}
+	}
 
-	if err := stateStore.Save(buildHistoryState(dataset, playlists, previousState, now)); err != nil {
+	if err := stateStore.Save(buildHistoryState(
+		dataset,
+		playlists,
+		seasonalUpdate.Snapshot,
+		previousState,
+		now,
+	)); err != nil {
 		logger.Printf("state save warning: %v", err)
 	}
 
@@ -107,11 +123,13 @@ func run(
 func buildHistoryState(
 	dataset features.Dataset,
 	playlists []playlist.Definition,
+	seasonal state.SeasonalSnapshot,
 	previous *state.HistoryState,
 	now time.Time,
 ) *state.HistoryState {
 	result := state.NewHistoryState()
 	result.UpdatedAt = now
+	result.Seasonal = seasonal
 
 	for _, item := range dataset.Items {
 		previousSeenCount := 0
