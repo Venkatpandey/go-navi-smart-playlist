@@ -16,6 +16,7 @@ type HistoryState struct {
 	UpdatedAt time.Time                   `json:"updatedAt"`
 	Tracks    map[string]TrackSnapshot    `json:"tracks"`
 	Playlists map[string]PlaylistSnapshot `json:"playlists"`
+	Seasonal  SeasonalSnapshot            `json:"seasonal"`
 }
 
 type TrackSnapshot struct {
@@ -49,6 +50,11 @@ type PlaylistSnapshot struct {
 	TrackIDs []string `json:"trackIds"`
 }
 
+type SeasonalSnapshot struct {
+	Period     string         `json:"period"`
+	PlayCounts map[string]int `json:"playCounts"`
+}
+
 type Store struct {
 	path    string
 	enabled bool
@@ -65,9 +71,12 @@ func NewStore(path string, enabled bool, logger *log.Logger) *Store {
 
 func NewHistoryState() *HistoryState {
 	return &HistoryState{
-		Version:   1,
+		Version:   2,
 		Tracks:    map[string]TrackSnapshot{},
 		Playlists: map[string]PlaylistSnapshot{},
+		Seasonal: SeasonalSnapshot{
+			PlayCounts: map[string]int{},
+		},
 	}
 }
 
@@ -100,6 +109,9 @@ func (s *Store) Load() (*HistoryState, error) {
 	}
 	if payload.Playlists == nil {
 		payload.Playlists = map[string]PlaylistSnapshot{}
+	}
+	if payload.Seasonal.PlayCounts == nil {
+		payload.Seasonal.PlayCounts = map[string]int{}
 	}
 
 	return payload, nil
