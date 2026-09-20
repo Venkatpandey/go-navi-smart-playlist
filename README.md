@@ -29,10 +29,13 @@ Lightweight Go microservice for Navidrome that generates smart playlists from li
   - `Deep Cuts`
   - `Quick Mix`
   - `Longform`
-- Persists a tiny local state cache to improve future recommendations
+- Persists a tiny local state cache to improve future recommendations and track multi-run cooldowns
 - Uses derived features and lightweight vector similarity for better ranking
-- Applies diversity rules with caps per artist and album
-- Applies playlist-specific eligibility rules so each playlist keeps its intended meaning
+- Applies diversity rules with caps per artist and album, plus artist interleaving to avoid consecutive clustering
+- Applies cross-playlist budget penalties to prevent the same tracks from appearing across multiple playlists in the same run
+- Uses multi-run state-based cooldowns to ensure fresh tracks rotate in rather than ping-ponging every other cycle
+- Uses score-weighted sampling from top candidates to increase playlist variability
+- Applies playlist-specific eligibility rules so each playlist keeps its distinct intended meaning
 - Uses deterministic weekly variation to rotate discovery and shuffle playlists
 - Uses genre matches when available and duration metadata for session-length playlists
 - Creates missing playlists and updates existing ones
