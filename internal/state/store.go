@@ -20,12 +20,12 @@ type HistoryState struct {
 }
 
 type TrackSnapshot struct {
-	ID         string                 `json:"id"`
-	PlayCount  int                    `json:"playCount"`
-	LastPlayed time.Time              `json:"lastPlayed"`
-	Created    time.Time              `json:"created"`
-	Artist     string                 `json:"artist"`
-	Album      string                 `json:"album"`
+	ID             string                 `json:"id"`
+	PlayCount      int                    `json:"playCount"`
+	LastPlayed     time.Time              `json:"lastPlayed"`
+	Created        time.Time              `json:"created"`
+	Artist         string                 `json:"artist"`
+	Album          string                 `json:"album"`
 	SeenCount      int                    `json:"seenCount"`
 	LastSeenAt     time.Time              `json:"lastSeenAt"`
 	LastFeaturedAt time.Time              `json:"lastFeaturedAt,omitempty"`
