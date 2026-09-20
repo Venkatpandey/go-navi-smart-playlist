@@ -26,9 +26,11 @@ type TrackSnapshot struct {
 	Created    time.Time              `json:"created"`
 	Artist     string                 `json:"artist"`
 	Album      string                 `json:"album"`
-	SeenCount  int                    `json:"seenCount"`
-	LastSeenAt time.Time              `json:"lastSeenAt"`
-	Derived    DerivedFeatureSnapshot `json:"derived"`
+	SeenCount      int                    `json:"seenCount"`
+	LastSeenAt     time.Time              `json:"lastSeenAt"`
+	LastFeaturedAt time.Time              `json:"lastFeaturedAt,omitempty"`
+	LastFeaturedIn map[string]time.Time   `json:"lastFeaturedIn,omitempty"`
+	Derived        DerivedFeatureSnapshot `json:"derived"`
 }
 
 type DerivedFeatureSnapshot struct {
@@ -170,4 +172,30 @@ func (h *HistoryState) PlaylistContains(name, trackID string) bool {
 	}
 
 	return false
+}
+
+func (h *HistoryState) TrackLastFeatured(trackID string) (time.Time, bool) {
+	if h == nil {
+		return time.Time{}, false
+	}
+	snapshot, ok := h.Tracks[trackID]
+	if !ok || snapshot.LastFeaturedAt.IsZero() {
+		return time.Time{}, false
+	}
+	return snapshot.LastFeaturedAt, true
+}
+
+func (h *HistoryState) TrackLastFeaturedIn(playlistName, trackID string) (time.Time, bool) {
+	if h == nil {
+		return time.Time{}, false
+	}
+	snapshot, ok := h.Tracks[trackID]
+	if !ok || snapshot.LastFeaturedIn == nil {
+		return time.Time{}, false
+	}
+	when, ok := snapshot.LastFeaturedIn[playlistName]
+	if !ok || when.IsZero() {
+		return time.Time{}, false
+	}
+	return when, true
 }

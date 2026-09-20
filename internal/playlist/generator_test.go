@@ -118,6 +118,7 @@ func TestSimilarPlaylistExcludesEverySeedTrack(t *testing.T) {
 		false,
 		0,
 		0,
+		nil,
 		func(_ features.TrackFeatures, similarityScore, _ float64) float64 { return similarityScore },
 	)
 
@@ -210,6 +211,130 @@ func assertTracksMatch(t *testing.T, playlists []Definition, name string, predic
 	t.Fatalf("missing playlist %q", name)
 }
 
+func TestArtistInterleaving(t *testing.T) {
+	input := []model.Track{
+		{ID: "1", Artist: "Artist A", Title: "A1"},
+		{ID: "2", Artist: "Artist A", Title: "A2"},
+		{ID: "3", Artist: "Artist A", Title: "A3"},
+		{ID: "4", Artist: "Artist B", Title: "B1"},
+		{ID: "5", Artist: "Artist B", Title: "B2"},
+		{ID: "6", Artist: "Artist C", Title: "C1"},
+		{ID: "7", Artist: "Artist D", Title: "D1"},
+	}
+
+	result := interleaveArtists(input)
+	if len(result) != len(input) {
+		t.Fatalf("expected %d tracks, got %d", len(input), len(result))
+	}
+
+	for i := 1; i < len(result); i++ {
+		if result[i].Artist == result[i-1].Artist {
+			t.Fatalf("consecutive tracks from same artist %q at index %d and %d: %+v", result[i].Artist, i-1, i, result)
+		}
+	}
+}
+
+func TestRecipeExclusivityFreshVsDiscover(t *testing.T) {
+	generator := newTestGenerator(t, 10, 0)
+	recipes := generator.recipes()
+	var freshRecipe, discoverRecipe recipe
+	for _, r := range recipes {
+		if r.name == "Fresh & Unplayed" {
+			freshRecipe = r
+		}
+		if r.name == "Discover Weekly" {
+			discoverRecipe = r
+		}
+	}
+
+	now := time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC)
+
+	// Unplayed track added 10 days ago (fresh unplayed)
+	freshTrack := features.TrackFeatures{
+		Track:          model.Track{ID: "fresh", PlayCount: 0, Created: now.Add(-10 * 24 * time.Hour)},
+		DaysSinceAdded: 10,
+		HasLastPlayed:  false,
+	}
+	if !freshRecipe.eligible(freshTrack) {
+		t.Fatalf("expected fresh unplayed track to be eligible for Fresh & Unplayed")
+	}
+	if discoverRecipe.eligible(freshTrack) {
+		t.Fatalf("expected fresh unplayed track NOT to be eligible for Discover Weekly")
+	}
+
+	// Unplayed track added 200 days ago (older unplayed)
+	olderUnplayed := features.TrackFeatures{
+		Track:          model.Track{ID: "older", PlayCount: 0, Created: now.Add(-200 * 24 * time.Hour)},
+		DaysSinceAdded: 200,
+		HasLastPlayed:  false,
+	}
+	if freshRecipe.eligible(olderUnplayed) {
+		t.Fatalf("expected older unplayed track NOT to be eligible for Fresh & Unplayed")
+	}
+	if !discoverRecipe.eligible(olderUnplayed) {
+		t.Fatalf("expected older unplayed track to be eligible for Discover Weekly")
+	}
+
+	// Low play track (played 3 times)
+	lowPlayTrack := features.TrackFeatures{
+		Track:         model.Track{ID: "lowplay", PlayCount: 3, LastPlayed: now.Add(-30 * 24 * time.Hour)},
+		HasLastPlayed: true,
+	}
+	if freshRecipe.eligible(lowPlayTrack) {
+		t.Fatalf("expected played track NOT to be eligible for Fresh & Unplayed")
+	}
+	if !discoverRecipe.eligible(lowPlayTrack) {
+		t.Fatalf("expected low play track to be eligible for Discover Weekly")
+	}
+}
+
+func TestMultiRunCooldownDecay(t *testing.T) {
+	generator := newTestGenerator(t, 10, 0)
+	now := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+
+	stateRecent := state.NewHistoryState()
+	stateRecent.Tracks["t1"] = state.TrackSnapshot{
+		ID:             "t1",
+		LastFeaturedAt: now.Add(-3 * 24 * time.Hour), // 3 days ago
+		LastFeaturedIn: map[string]time.Time{"Discover Weekly": now.Add(-3 * 24 * time.Hour)},
+	}
+
+	stateWeek2 := state.NewHistoryState()
+	stateWeek2.Tracks["t1"] = state.TrackSnapshot{
+		ID:             "t1",
+		LastFeaturedAt: now.Add(-10 * 24 * time.Hour), // 10 days ago (week 2)
+		LastFeaturedIn: map[string]time.Time{"Discover Weekly": now.Add(-10 * 24 * time.Hour)},
+	}
+
+	stateWeek3 := state.NewHistoryState()
+	stateWeek3.Tracks["t1"] = state.TrackSnapshot{
+		ID:             "t1",
+		LastFeaturedAt: now.Add(-18 * 24 * time.Hour), // 18 days ago (week 3)
+		LastFeaturedIn: map[string]time.Time{"Discover Weekly": now.Add(-18 * 24 * time.Hour)},
+	}
+
+	stateOld := state.NewHistoryState()
+	stateOld.Tracks["t1"] = state.TrackSnapshot{
+		ID:             "t1",
+		LastFeaturedAt: now.Add(-30 * 24 * time.Hour), // 30 days ago
+		LastFeaturedIn: map[string]time.Time{"Discover Weekly": now.Add(-30 * 24 * time.Hour)},
+	}
+
+	penRecent := generator.playlistCarryover(stateRecent, "Discover Weekly", "t1", -0.65, now)
+	penWeek2 := generator.playlistCarryover(stateWeek2, "Discover Weekly", "t1", -0.65, now)
+	penWeek3 := generator.playlistCarryover(stateWeek3, "Discover Weekly", "t1", -0.65, now)
+	penOld := generator.playlistCarryover(stateOld, "Discover Weekly", "t1", -0.65, now)
+
+	// Verify decaying penalty: recent is most negative, then week 2, then week 3, then old has no penalty
+	if penRecent >= penWeek2 || penWeek2 >= penWeek3 || penWeek3 >= penOld {
+		t.Fatalf("expected strictly decaying penalties: recent=%.3f, week2=%.3f, week3=%.3f, old=%.3f",
+			penRecent, penWeek2, penWeek3, penOld)
+	}
+	if penOld != 0 {
+		t.Fatalf("expected old state to have 0 penalty, got %.3f", penOld)
+	}
+}
+
 type testWriter struct {
 	t *testing.T
 }
@@ -218,3 +343,4 @@ func (w testWriter) Write(p []byte) (int, error) {
 	w.t.Logf("%s", p)
 	return len(p), nil
 }
+

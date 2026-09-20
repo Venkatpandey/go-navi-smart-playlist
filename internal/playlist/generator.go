@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"log"
 	"math"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -60,40 +61,81 @@ func NewGenerator(cfg config.Config, logger *log.Logger) *Generator {
 }
 
 func (g *Generator) Generate(dataset features.Dataset, previous *state.HistoryState, now time.Time) []Definition {
+	crossPlaylistCounts := make(map[string]int)
 	ranked := make(map[string][]features.TrackFeatures)
-	for _, currentRecipe := range g.recipes() {
-		ranked[currentRecipe.name] = g.rankRecipe(currentRecipe, dataset.Items, previous, now)
+
+	recipes := g.recipes()
+	recipeMap := make(map[string]recipe, len(recipes))
+	for _, r := range recipes {
+		recipeMap[r.name] = r
 	}
 
-	ranked["More Like Hidden Gems"] = g.similarPlaylist(
+	// Priority generation order:
+	// 1. High-intent / specific recipes
+	// 2. Discovery recipes
+	// 3. Recall & General mixes
+	// 4. Duration-based mixes
+	priorityNames := []string{
+		"Fresh & Unplayed",
+		"Rising This Week",
+		"Top This Month",
+		"Forgotten Favorites",
+		"Discover Weekly",
+		"Deep Cuts",
+		"Hidden Gems",
 		"More Like Hidden Gems",
-		dataset,
-		previous,
-		now,
-		ranked["Hidden Gems"],
-		false,
-		-0.35,
-		0.25,
-		func(track features.TrackFeatures, similarityScore, genreMatch float64) float64 {
-			return 1.6*similarityScore + 0.3*genreMatch + g.engine.BaseScore(track) + 0.8*track.NoveltyScore
-		},
-	)
-
-	ranked["Artist Adjacent Comfort"] = g.similarPlaylist(
+		"Rediscover",
+		"Long Time No See",
+		"Comfort Shuffle",
 		"Artist Adjacent Comfort",
-		dataset,
-		previous,
-		now,
-		ranked["Comfort Shuffle"],
-		true,
-		-0.2,
-		0.35,
-		func(track features.TrackFeatures, similarityScore, genreMatch float64) float64 {
-			return 1.5*similarityScore + 0.4*genreMatch + g.engine.BaseScore(track) + 0.5*track.StabilityScore
-		},
-	)
+		"Quick Mix",
+		"Longform",
+	}
 
-	names := []string{
+	for _, name := range priorityNames {
+		switch name {
+		case "More Like Hidden Gems":
+			ranked[name] = g.similarPlaylist(
+				name,
+				dataset,
+				previous,
+				now,
+				ranked["Hidden Gems"],
+				false,
+				-0.35,
+				0.25,
+				crossPlaylistCounts,
+				func(track features.TrackFeatures, similarityScore, genreMatch float64) float64 {
+					return 1.6*similarityScore + 0.3*genreMatch + g.engine.BaseScore(track) + 0.8*track.NoveltyScore
+				},
+			)
+		case "Artist Adjacent Comfort":
+			ranked[name] = g.similarPlaylist(
+				name,
+				dataset,
+				previous,
+				now,
+				ranked["Comfort Shuffle"],
+				true,
+				-0.2,
+				0.35,
+				crossPlaylistCounts,
+				func(track features.TrackFeatures, similarityScore, genreMatch float64) float64 {
+					return 1.5*similarityScore + 0.4*genreMatch + g.engine.BaseScore(track) + 0.5*track.StabilityScore
+				},
+			)
+		default:
+			if rec, ok := recipeMap[name]; ok {
+				ranked[name] = g.rankRecipe(rec, dataset.Items, previous, now, crossPlaylistCounts)
+			}
+		}
+
+		for _, item := range ranked[name] {
+			crossPlaylistCounts[item.Track.ID]++
+		}
+	}
+
+	catalogOrder := []string{
 		"Discover Weekly",
 		"Rediscover",
 		"Top This Month",
@@ -110,9 +152,11 @@ func (g *Generator) Generate(dataset features.Dataset, previous *state.HistorySt
 		"Longform",
 	}
 
-	definitions := make([]Definition, 0, len(names))
-	for _, name := range names {
-		definition := Definition{Name: name, Tracks: toTracks(ranked[name])}
+	definitions := make([]Definition, 0, len(catalogOrder))
+	for _, name := range catalogOrder {
+		tracks := toTracks(ranked[name])
+		interleaved := interleaveArtists(tracks)
+		definition := Definition{Name: name, Tracks: interleaved}
 		definitions = append(definitions, definition)
 		g.logger.Printf("generated playlist %q with %d tracks", definition.Name, len(definition.Tracks))
 	}
@@ -125,7 +169,10 @@ func (g *Generator) recipes() []recipe {
 		{
 			name: "Discover Weekly",
 			eligible: func(track features.TrackFeatures) bool {
-				return !track.HasLastPlayed || track.Track.PlayCount <= 3 || track.DaysSinceAdded <= 180
+				if !track.HasLastPlayed {
+					return track.DaysSinceAdded > 180
+				}
+				return track.Track.PlayCount <= 5
 			},
 			score: func(track features.TrackFeatures) float64 {
 				return g.engine.BaseScore(track) +
@@ -140,11 +187,11 @@ func (g *Generator) recipes() []recipe {
 		{
 			name: "Rediscover",
 			eligible: func(track features.TrackFeatures) bool {
-				return track.HasLastPlayed && track.DaysSinceLastPlayed >= 45 && track.DaysSinceLastPlayed <= 720
+				return track.HasLastPlayed && track.DaysSinceLastPlayed >= 45 && track.DaysSinceLastPlayed < 120
 			},
 			score: func(track features.TrackFeatures) float64 {
 				return g.engine.BaseScore(track) +
-					1.4*windowScore(track.DaysSinceLastPlayed, 60, 365, 45) +
+					1.4*windowScore(track.DaysSinceLastPlayed, 45, 120, 30) +
 					0.9*track.PlayCountPercentile +
 					0.4*track.StabilityScore -
 					0.3*track.RepeatFatigueScore
@@ -227,11 +274,11 @@ func (g *Generator) recipes() []recipe {
 			name: "Forgotten Favorites",
 			eligible: func(track features.TrackFeatures) bool {
 				favorite := track.Track.Starred || track.Track.Rating >= 4 || track.PlayCountPercentile >= 0.65
-				return favorite && track.HasLastPlayed && track.DaysSinceLastPlayed >= 180
+				return favorite && track.HasLastPlayed && track.DaysSinceLastPlayed >= 120
 			},
 			score: func(track features.TrackFeatures) float64 {
 				return 1.5*preferenceScore(track) +
-					1.4*longTailScore(track.DaysSinceLastPlayed, 180, 75) +
+					1.4*longTailScore(track.DaysSinceLastPlayed, 120, 75) +
 					0.6*track.StabilityScore
 			},
 			carryover:  -0.5,
@@ -299,6 +346,7 @@ func (g *Generator) similarPlaylist(
 	excludeSeedArtists bool,
 	carryover float64,
 	weekJitter float64,
+	crossPlaylistCounts map[string]int,
 	scorer func(track features.TrackFeatures, similarityScore, genreMatch float64) float64,
 ) []features.TrackFeatures {
 	if len(seeds) == 0 {
@@ -343,29 +391,45 @@ func (g *Generator) similarPlaylist(
 		if duplicateArtist {
 			score -= 0.25
 		}
-		score += g.playlistCarryover(previous, name, track.Track.ID, carryover)
+		score += g.playlistCarryover(previous, name, track.Track.ID, carryover, now)
 		score += centeredWeeklyJitter(name, track.Track.ID, now) * weekJitter
+		if prior := crossPlaylistCounts[track.Track.ID]; prior > 0 {
+			score -= float64(prior) * 1.5
+		}
 		scored = append(scored, scoredTrack{track: track, score: score})
 	}
 
 	sortScored(scored)
-	return g.finalize(name, scored)
+	return g.finalize(name, scored, now)
 }
 
-func (g *Generator) rankRecipe(currentRecipe recipe, items []features.TrackFeatures, previous *state.HistoryState, now time.Time) []features.TrackFeatures {
+func (g *Generator) rankRecipe(
+	currentRecipe recipe,
+	items []features.TrackFeatures,
+	previous *state.HistoryState,
+	now time.Time,
+	crossPlaylistCounts map[string]int,
+) []features.TrackFeatures {
 	scored := make([]scoredTrack, 0, len(items))
 	for _, track := range items {
 		if currentRecipe.eligible != nil && !currentRecipe.eligible(track) {
 			continue
 		}
 		score := currentRecipe.score(track)
-		score += g.playlistCarryover(previous, currentRecipe.name, track.Track.ID, currentRecipe.carryover)
+		score += g.playlistCarryover(previous, currentRecipe.name, track.Track.ID, currentRecipe.carryover, now)
 		score += centeredWeeklyJitter(currentRecipe.name, track.Track.ID, now) * currentRecipe.weekJitter
+		if prior := crossPlaylistCounts[track.Track.ID]; prior > 0 {
+			if currentRecipe.name == "Quick Mix" || currentRecipe.name == "Longform" {
+				score -= float64(prior) * 0.4
+			} else {
+				score -= float64(prior) * 1.5
+			}
+		}
 		scored = append(scored, scoredTrack{track: track, score: score})
 	}
 
 	sortScored(scored)
-	return g.finalize(currentRecipe.name, scored)
+	return g.finalize(currentRecipe.name, scored, now)
 }
 
 func sortScored(scored []scoredTrack) {
@@ -377,8 +441,8 @@ func sortScored(scored []scoredTrack) {
 	})
 }
 
-func (g *Generator) finalize(name string, scored []scoredTrack) []features.TrackFeatures {
-	result := limitDiversity(scored, g.size, defaultArtistLimit, defaultAlbumLimit)
+func (g *Generator) finalize(name string, scored []scoredTrack, now time.Time) []features.TrackFeatures {
+	result := sampleWithDiversity(scored, g.size, defaultArtistLimit, defaultAlbumLimit, name, now)
 	if len(result) < min(g.size, g.minBackfill) {
 		result = limitDiversity(scored, g.size, maxBackfillLimit, maxBackfillLimit)
 	}
@@ -387,12 +451,223 @@ func (g *Generator) finalize(name string, scored []scoredTrack) []features.Track
 	return result
 }
 
-func (g *Generator) playlistCarryover(previous *state.HistoryState, playlistName, trackID string, adjustment float64) float64 {
-	if previous == nil || !previous.PlaylistContains(playlistName, trackID) {
+func (g *Generator) playlistCarryover(
+	previous *state.HistoryState,
+	playlistName, trackID string,
+	adjustment float64,
+	now time.Time,
+) float64 {
+	if previous == nil {
 		return 0
 	}
 
-	return adjustment
+	penalty := 0.0
+
+	if lastFeatured, ok := previous.TrackLastFeaturedIn(playlistName, trackID); ok {
+		daysSince := now.Sub(lastFeatured).Hours() / 24
+		if daysSince < 0 {
+			daysSince = 0
+		}
+		if adjustment < 0 {
+			switch {
+			case daysSince <= 7:
+				penalty += adjustment
+			case daysSince <= 14:
+				penalty += adjustment * 0.65
+			case daysSince <= 21:
+				penalty += adjustment * 0.35
+			}
+		} else if adjustment > 0 {
+			switch {
+			case daysSince <= 7:
+				penalty += adjustment
+			case daysSince <= 14:
+				penalty += adjustment * 0.5
+			}
+		}
+	} else if previous.PlaylistContains(playlistName, trackID) {
+		penalty += adjustment
+	}
+
+	if lastFeaturedAt, ok := previous.TrackLastFeatured(trackID); ok {
+		daysSinceGlobal := now.Sub(lastFeaturedAt).Hours() / 24
+		if daysSinceGlobal < 0 {
+			daysSinceGlobal = 0
+		}
+		switch {
+		case daysSinceGlobal <= 7:
+			penalty -= 0.4
+		case daysSinceGlobal <= 14:
+			penalty -= 0.2
+		case daysSinceGlobal <= 21:
+			penalty -= 0.1
+		}
+	}
+
+	return penalty
+}
+
+func sampleWithDiversity(
+	items []scoredTrack,
+	size, maxPerArtist, maxPerAlbum int,
+	playlistName string,
+	now time.Time,
+) []features.TrackFeatures {
+	if len(items) <= size {
+		return limitDiversity(items, size, maxPerArtist, maxPerAlbum)
+	}
+
+	poolSize := min(len(items), max(size+15, int(float64(size)*1.5)))
+	pool := items[:poolSize]
+
+	weights := make([]float64, len(pool))
+	for i := range pool {
+		weights[i] = 1.0 / math.Pow(float64(i+1), 0.75)
+	}
+
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(fmt.Sprintf("%s:%d", playlistName, now.Unix())))
+	rng := rand.New(rand.NewSource(int64(hasher.Sum64())))
+
+	selected := make([]features.TrackFeatures, 0, min(len(items), size))
+	artistCounts := make(map[string]int)
+	albumCounts := make(map[string]int)
+	chosen := make(map[int]bool, poolSize)
+
+	for len(selected) < size && len(chosen) < poolSize {
+		totalWeight := 0.0
+		for i, w := range weights {
+			if !chosen[i] {
+				artistKey := diversityKey(pool[i].track.Track.Artist, pool[i].track.Track.ID)
+				albumKey := diversityKey(pool[i].track.Track.Album, pool[i].track.Track.ID)
+				if artistCounts[artistKey] < maxPerArtist && albumCounts[albumKey] < maxPerAlbum {
+					totalWeight += w
+				}
+			}
+		}
+
+		if totalWeight <= 0 {
+			break
+		}
+
+		target := rng.Float64() * totalWeight
+		cumulative := 0.0
+		pickedIndex := -1
+
+		for i, w := range weights {
+			if !chosen[i] {
+				artistKey := diversityKey(pool[i].track.Track.Artist, pool[i].track.Track.ID)
+				albumKey := diversityKey(pool[i].track.Track.Album, pool[i].track.Track.ID)
+				if artistCounts[artistKey] < maxPerArtist && albumCounts[albumKey] < maxPerAlbum {
+					cumulative += w
+					if cumulative >= target {
+						pickedIndex = i
+						break
+					}
+				}
+			}
+		}
+
+		if pickedIndex < 0 {
+			for i := range pool {
+				if !chosen[i] {
+					artistKey := diversityKey(pool[i].track.Track.Artist, pool[i].track.Track.ID)
+					albumKey := diversityKey(pool[i].track.Track.Album, pool[i].track.Track.ID)
+					if artistCounts[artistKey] < maxPerArtist && albumCounts[albumKey] < maxPerAlbum {
+						pickedIndex = i
+						break
+					}
+				}
+			}
+			if pickedIndex < 0 {
+				break
+			}
+		}
+
+		chosen[pickedIndex] = true
+		artistKey := diversityKey(pool[pickedIndex].track.Track.Artist, pool[pickedIndex].track.Track.ID)
+		albumKey := diversityKey(pool[pickedIndex].track.Track.Album, pool[pickedIndex].track.Track.ID)
+		artistCounts[artistKey]++
+		albumCounts[albumKey]++
+		selected = append(selected, pool[pickedIndex].track)
+	}
+
+	return selected
+}
+
+func interleaveArtists(tracks []model.Track) []model.Track {
+	if len(tracks) <= 2 {
+		return tracks
+	}
+
+	groups := make(map[string][]model.Track)
+	order := make([]string, 0)
+	for _, track := range tracks {
+		key := artistKey(track.Artist, track.ID)
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], track)
+	}
+
+	if len(groups) == len(tracks) {
+		return tracks
+	}
+
+	result := make([]model.Track, 0, len(tracks))
+	lastArtistKey := ""
+	remaining := len(tracks)
+
+	for remaining > 0 {
+		bestKey := ""
+		bestCount := -1
+		bestIndexInOrder := -1
+
+		for idx, key := range order {
+			count := len(groups[key])
+			if count == 0 {
+				continue
+			}
+
+			if key == lastArtistKey && remaining > count {
+				continue
+			}
+
+			if count > bestCount {
+				bestCount = count
+				bestKey = key
+				bestIndexInOrder = idx
+			} else if count == bestCount && (bestIndexInOrder == -1 || idx < bestIndexInOrder) {
+				bestKey = key
+				bestIndexInOrder = idx
+			}
+		}
+
+		if bestKey == "" {
+			for _, key := range order {
+				if len(groups[key]) > 0 {
+					bestKey = key
+					break
+				}
+			}
+		}
+
+		nextTrack := groups[bestKey][0]
+		groups[bestKey] = groups[bestKey][1:]
+		result = append(result, nextTrack)
+		lastArtistKey = bestKey
+		remaining--
+	}
+
+	return result
+}
+
+func artistKey(artist, trackID string) string {
+	k := canonicalKey(artist)
+	if k == "__unknown__" || k == "unknown artist" {
+		return k + ":" + trackID
+	}
+	return k
 }
 
 func centeredWeeklyJitter(playlistName, trackID string, now time.Time) float64 {

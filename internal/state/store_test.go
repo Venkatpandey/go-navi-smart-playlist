@@ -14,8 +14,15 @@ func TestStoreRoundTrip(t *testing.T) {
 	store := NewStore(path, true, log.New(testWriter{t}, "", 0))
 
 	input := NewHistoryState()
+	featuredTime := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
 	input.UpdatedAt = time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC)
-	input.Tracks["track-1"] = TrackSnapshot{ID: "track-1", PlayCount: 4, SeenCount: 2}
+	input.Tracks["track-1"] = TrackSnapshot{
+		ID:             "track-1",
+		PlayCount:      4,
+		SeenCount:      2,
+		LastFeaturedAt: featuredTime,
+		LastFeaturedIn: map[string]time.Time{"Mix": featuredTime},
+	}
 	input.Playlists["Mix"] = PlaylistSnapshot{TrackIDs: []string{"track-1"}}
 	input.Seasonal = SeasonalSnapshot{
 		Period:     "2026-Q2",
@@ -36,6 +43,15 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if !output.PlaylistContains("Mix", "track-1") {
 		t.Fatalf("expected playlist membership to round-trip")
+	}
+	if when, ok := output.TrackLastFeatured("track-1"); !ok || !when.Equal(featuredTime) {
+		t.Fatalf("expected TrackLastFeatured to match %v, got %v (ok=%v)", featuredTime, when, ok)
+	}
+	if when, ok := output.TrackLastFeaturedIn("Mix", "track-1"); !ok || !when.Equal(featuredTime) {
+		t.Fatalf("expected TrackLastFeaturedIn to match %v, got %v (ok=%v)", featuredTime, when, ok)
+	}
+	if _, ok := output.TrackLastFeaturedIn("Other", "track-1"); ok {
+		t.Fatalf("expected TrackLastFeaturedIn for Other to return false")
 	}
 	if output.Seasonal.Period != "2026-Q2" || output.Seasonal.PlayCounts["track-1"] != 3 {
 		t.Fatalf("expected seasonal activity to round-trip, got %+v", output.Seasonal)

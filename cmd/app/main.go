@@ -133,21 +133,32 @@ func buildHistoryState(
 
 	for _, item := range dataset.Items {
 		previousSeenCount := 0
+		var previousLastFeaturedAt time.Time
+		var previousLastFeaturedIn map[string]time.Time
 		if previous != nil {
 			if snapshot, ok := previous.Tracks[item.Track.ID]; ok {
 				previousSeenCount = snapshot.SeenCount
+				previousLastFeaturedAt = snapshot.LastFeaturedAt
+				if snapshot.LastFeaturedIn != nil {
+					previousLastFeaturedIn = make(map[string]time.Time, len(snapshot.LastFeaturedIn))
+					for k, v := range snapshot.LastFeaturedIn {
+						previousLastFeaturedIn[k] = v
+					}
+				}
 			}
 		}
 
 		result.Tracks[item.Track.ID] = state.TrackSnapshot{
-			ID:         item.Track.ID,
-			PlayCount:  item.Track.PlayCount,
-			LastPlayed: item.Track.LastPlayed,
-			Created:    item.Track.Created,
-			Artist:     item.Track.Artist,
-			Album:      item.Track.Album,
-			SeenCount:  previousSeenCount + 1,
-			LastSeenAt: now,
+			ID:             item.Track.ID,
+			PlayCount:      item.Track.PlayCount,
+			LastPlayed:     item.Track.LastPlayed,
+			Created:        item.Track.Created,
+			Artist:         item.Track.Artist,
+			Album:          item.Track.Album,
+			SeenCount:      previousSeenCount + 1,
+			LastSeenAt:     now,
+			LastFeaturedAt: previousLastFeaturedAt,
+			LastFeaturedIn: previousLastFeaturedIn,
 			Derived: state.DerivedFeatureSnapshot{
 				PlayCountPercentile: item.PlayCountPercentile,
 				DaysSinceLastPlayed: item.DaysSinceLastPlayed,
@@ -169,6 +180,14 @@ func buildHistoryState(
 		trackIDs := make([]string, 0, len(definition.Tracks))
 		for _, track := range definition.Tracks {
 			trackIDs = append(trackIDs, track.ID)
+			if snapshot, ok := result.Tracks[track.ID]; ok {
+				snapshot.LastFeaturedAt = now
+				if snapshot.LastFeaturedIn == nil {
+					snapshot.LastFeaturedIn = make(map[string]time.Time)
+				}
+				snapshot.LastFeaturedIn[definition.Name] = now
+				result.Tracks[track.ID] = snapshot
+			}
 		}
 
 		result.Playlists[definition.Name] = state.PlaylistSnapshot{TrackIDs: trackIDs}
